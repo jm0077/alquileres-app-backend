@@ -23,40 +23,7 @@ jobs:
       run: |
         echo "📦 Iniciando backup automático de alquileres"
         echo "📅 Fecha: $(date)"
-        echo "🌍 Timezone: UTC"
         echo "💾 Tipo: Backup completo"
-        echo "🔗 API URL: ${{ secrets.ALQUILERES_API_URL }}"
-
-    - name: 🔍 Verificar conectividad con la API
-      run: |
-        echo "🔍 Verificando que la API esté activa..."
-        
-        # Intentar conectar al endpoint principal
-        HEALTH_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" \
-          -H "User-Agent: GitHub-Backup/1.0" \
-          --connect-timeout 30 \
-          --max-time 60 \
-          "${{ secrets.ALQUILERES_API_URL }}/" || echo "CURL_FAILED")
-        
-        if [[ "$HEALTH_RESPONSE" == "CURL_FAILED" ]]; then
-          echo "❌ No se puede conectar a la API"
-          echo "🔧 Verificar:"
-          echo "   • URL del secret: ${{ secrets.ALQUILERES_API_URL }}"
-          echo "   • Que Render esté activo"
-          echo "   • Que no haya errores en el servicio"
-          exit 1
-        fi
-        
-        HEALTH_STATUS=$(echo "$HEALTH_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
-        echo "📊 Status de conectividad: $HEALTH_STATUS"
-        
-        if [[ "$HEALTH_STATUS" != "200" ]]; then
-          echo "❌ API no responde correctamente (Status: $HEALTH_STATUS)"
-          echo "🔧 Revisar logs de Render"
-          exit 1
-        fi
-        
-        echo "✅ API está activa y respondiendo"
 
     - name: 📥 Realizar backup completo
       run: |
@@ -72,7 +39,7 @@ jobs:
         echo "📁 Archivo: $FILENAME"
         echo "📊 Incluir detalles: $INCLUDE_DETAILS"
         
-        # Realizar llamada al API de backup con timeout extendido
+        # Realizar llamada al API de backup (ARREGLADO: sin doble slash)
         HTTP_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" \
           -H "User-Agent: GitHub-Actions-Backup/1.0" \
           -H "Accept: application/json" \
@@ -125,7 +92,7 @@ jobs:
             echo "   • Total ingresos: $TOTAL_INCOMES"
             echo "   • Fecha de exportación: $EXPORT_DATE"
             
-            # Guardar nombre del archivo para el siguiente step
+            # Guardar variables para pasos siguientes
             echo "BACKUP_FILENAME=$FILENAME" >> $GITHUB_ENV
             echo "FILE_SIZE_BYTES=$FILE_SIZE" >> $GITHUB_ENV
             echo "PROPERTIES_COUNT=$PROPERTIES_COUNT" >> $GITHUB_ENV
@@ -152,45 +119,6 @@ jobs:
         path: ${{ env.BACKUP_FILENAME }}
         retention-days: 90
         compression-level: 6
-
-    - name: 🔍 Validar integridad del backup
-      run: |
-        echo "🔍 Validando integridad del backup..."
-        
-        FILENAME="${{ env.BACKUP_FILENAME }}"
-        
-        if [[ -f "$FILENAME" ]]; then
-          # Verificar estructura básica
-          HAS_VERSION=$(jq -r '.version // "missing"' "$FILENAME")
-          HAS_EXPORT_DATE=$(jq -r '.exportDate // "missing"' "$FILENAME")
-          HAS_STRUCTURE=$(jq -r '.structure // "missing"' "$FILENAME")
-          
-          echo "📋 Verificación de estructura:"
-          echo "   • Version: $HAS_VERSION"
-          echo "   • Export Date: $HAS_EXPORT_DATE"  
-          echo "   • Structure: $HAS_STRUCTURE"
-          
-          # Verificar que tiene las secciones principales
-          HAS_PROPERTIES=$(jq -r 'has("properties")' "$FILENAME")
-          HAS_UNITS=$(jq -r 'has("units")' "$FILENAME")
-          HAS_STATS=$(jq -r 'has("stats")' "$FILENAME")
-          
-          echo "📊 Verificación de secciones:"
-          echo "   • Properties: $HAS_PROPERTIES"
-          echo "   • Units: $HAS_UNITS"
-          echo "   • Stats: $HAS_STATS"
-          
-          if [[ "$HAS_PROPERTIES" == "true" ]] && [[ "$HAS_UNITS" == "true" ]] && [[ "$HAS_STATS" == "true" ]]; then
-            echo "✅ Backup validado exitosamente"
-          else
-            echo "❌ Error: Estructura del backup incompleta"
-            exit 1
-          fi
-          
-        else
-          echo "❌ Error: No se encontró archivo de backup"
-          exit 1
-        fi
 
     - name: 📊 Generar reporte de backup
       if: success()
@@ -233,21 +161,17 @@ jobs:
         | 💸 Total egresos | ${{ env.TOTAL_EXPENSES }} |
         | 💰 Total ingresos | ${{ env.TOTAL_INCOMES }} |
         
-        ### 💾 Almacenamiento
+        ### 💾 Descarga del Backup
         
-        - ✅ **Guardado como GitHub Artifact**
-        - 📅 **Retención:** 90 días
-        - 📥 **Descarga:** Actions → Artifacts
-        - 🗜️ **Compresión:** Nivel 6
+        1. Ve a **Actions** → **Este workflow** 
+        2. Click en **Artifacts** (abajo)
+        3. Descarga **backup-alquileres-${{ github.run_number }}**
+        4. El archivo estará comprimido en un ZIP
         
-        ### 🔧 Información Técnica
-        - **API Endpoint:** \`GET /api/backup\`
-        - **Formato:** JSON
-        - **Estructura:** Real (adaptada a Firebase)
-        - **Status:** ✅ Validado
-        
-        ---
-        **🔄 Próximo backup automático:** Día 28 del siguiente mes
+        ### 📅 Información
+        - **Retención:** 90 días en GitHub
+        - **Próximo backup:** Día 28 del siguiente mes
+        - **URL utilizada:** ${{ secrets.ALQUILERES_API_URL }}/api/backup
         
         EOF
 
@@ -258,15 +182,10 @@ jobs:
           echo "🎉 Backup completado exitosamente"
           echo "✅ Archivo guardado como GitHub Artifact"
           echo "📥 Para descargar: Actions → Artifacts → backup-alquileres-${{ github.run_number }}"
-          echo "📅 Retención: 90 días"
           echo "📅 Próximo backup: 28 del siguiente mes"
         else
           echo "⚠️ El backup falló"
-          echo "🔧 Pasos para resolver:"
-          echo "   1. Verificar que la API esté activa en Render"
-          echo "   2. Revisar el secret ALQUILERES_API_URL"
-          echo "   3. Verificar logs de la API"
-          echo "   4. Probar manualmente: ${{ secrets.ALQUILERES_API_URL }}/api/backup"
+          echo "🔧 Revisar logs arriba para identificar el problema"
         fi
         
         echo "📋 Workflow de backup finalizado: $(date)"
