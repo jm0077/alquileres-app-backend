@@ -11,19 +11,13 @@ const admin = require('../../config/firebase');
  *       properties:
  *         properties:
  *           type: array
- *           description: Propiedades del usuario
+ *           description: Propiedades principales
  *         units:
  *           type: array
- *           description: Unidades/subpropiedades
- *         transactions:
+ *           description: Collection independiente de unidades
+ *         propertiesData:
  *           type: object
- *           description: Transacciones por período (año-mes)
- *         guarantees:
- *           type: array
- *           description: Garantías de inquilinos
- *         services:
- *           type: array
- *           description: Control de servicios (electricidad, agua, etc.)
+ *           description: Datos completos por propiedad (expenses + units con incomes)
  *         exportDate:
  *           type: string
  *           format: date-time
@@ -81,41 +75,84 @@ const getAllDocuments = async (collectionRef) => {
 };
 
 /**
- * Obtiene datos jerárquicos por año/mes de forma recursiva (solo para transactions)
+ * Obtiene todos los expenses de una propiedad en todos los períodos
  */
-const getHierarchicalData = async (collectionName) => {
+const getAllExpenses = async (propertyId) => {
   try {
-    const { listAvailablePeriods, getCollection } = require('../../utils/hierarchicalPath');
+    const { listExpensePeriods, getExpenses } = require('../../utils/hierarchicalPath');
     
-    // Obtener todos los períodos disponibles
-    const periods = await listAvailablePeriods(admin.firestore(), collectionName);
+    const periods = await listExpensePeriods(admin.firestore(), propertyId);
+    const expensesByPeriod = {};
     
-    if (periods.length === 0) {
-      return {};
-    }
-    
-    const hierarchicalData = {};
-    
-    // Obtener datos para cada período
     for (const period of periods) {
-      const periodKey = `${period.year}-${period.month.toString().padStart(2, '0')}`;
-      const collectionRef = getCollection(
-        admin.firestore(), 
-        collectionName, 
-        period.year, 
-        period.month
-      );
-      
-      const documents = await getAllDocuments(collectionRef);
-      if (documents.length > 0) {
-        hierarchicalData[periodKey] = documents;
+      const expenses = await getExpenses(admin.firestore(), propertyId, period.year, period.month);
+      if (expenses.length > 0) {
+        expensesByPeriod[period.periodKey] = expenses;
       }
     }
     
-    return hierarchicalData;
+    return expensesByPeriod;
   } catch (error) {
-    console.error(`Error al obtener datos jerárquicos de ${collectionName}:`, error);
+    console.error(`Error al obtener expenses de propiedad ${propertyId}:`, error);
     return {};
+  }
+};
+
+/**
+ * Obtiene todos los incomes de una unidad en todos los períodos
+ */
+const getAllIncomes = async (propertyId, unitId) => {
+  try {
+    const { listIncomePeriods, getIncomes } = require('../../utils/hierarchicalPath');
+    
+    const periods = await listIncomePeriods(admin.firestore(), propertyId, unitId);
+    const incomesByPeriod = {};
+    
+    for (const period of periods) {
+      const income = await getIncomes(admin.firestore(), propertyId, unitId, period.year, period.month);
+      if (income) {
+        incomesByPeriod[period.periodKey] = income;
+      }
+    }
+    
+    return incomesByPeriod;
+  } catch (error) {
+    console.error(`Error al obtener incomes de unidad ${unitId}:`, error);
+    return {};
+  }
+};
+
+/**
+ * Obtiene datos completos de una propiedad
+ */
+const getCompletePropertyData = async (propertyId, propertyData) => {
+  try {
+    const { getPropertyUnits } = require('../../utils/hierarchicalPath');
+    
+    // Obtener expenses de la propiedad
+    const expenses = await getAllExpenses(propertyId);
+    
+    // Obtener unidades de la propiedad
+    const propertyUnits = await getPropertyUnits(admin.firestore(), propertyId);
+    
+    // Para cada unidad, obtener sus incomes
+    const unitsWithIncomes = [];
+    for (const unit of propertyUnits) {
+      const incomes = await getAllIncomes(propertyId, unit.id);
+      unitsWithIncomes.push({
+        ...unit,
+        incomes
+      });
+    }
+    
+    return {
+      ...propertyData,
+      expenses,
+      units: unitsWithIncomes
+    };
+  } catch (error) {
+    console.error(`Error al obtener datos completos de propiedad ${propertyId}:`, error);
+    return propertyData;
   }
 };
 
@@ -123,8 +160,8 @@ const getHierarchicalData = async (collectionName) => {
  * @swagger
  * /api/backup:
  *   get:
- *     summary: Exportar backup completo (Alquileres)
- *     description: Exporta todos los datos de Firestore para alquileres en formato JSON
+ *     summary: Exportar backup completo (Alquileres - Estructura Real)
+ *     description: Exporta todos los datos de Firestore según la estructura real de alquileres
  *     tags: [Backup]
  *     parameters:
  *       - in: query
@@ -135,11 +172,11 @@ const getHierarchicalData = async (collectionName) => {
  *           default: json
  *         description: Formato del backup (solo JSON por ahora)
  *       - in: query
- *         name: includeHistory
+ *         name: includeDetails
  *         schema:
  *           type: boolean
  *           default: true
- *         description: Incluir historial completo de transacciones
+ *         description: Incluir detalles completos (expenses e incomes por período)
  *     responses:
  *       200:
  *         description: Backup generado exitosamente
@@ -147,83 +184,106 @@ const getHierarchicalData = async (collectionName) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/AlquileresBackupData'
- *           application/octet-stream:
- *             schema:
- *               type: string
- *               format: binary
- *         headers:
- *           Content-Disposition:
- *             description: Nombre del archivo de descarga
- *             schema:
- *               type: string
  *       500:
  *         description: Error interno del servidor
  */
 router.get('/', async (req, res) => {
   try {
-    const { format = 'json', includeHistory = 'true' } = req.query;
+    const { format = 'json', includeDetails = 'true' } = req.query;
     
-    console.log(`Iniciando backup de alquileres...`);
+    console.log(`Iniciando backup de alquileres (estructura real)...`);
     
     // Inicializar objeto de backup
     const backupData = {
       version: '1.0',
       exportDate: new Date().toISOString(),
-      structure: 'simple', // Sin userId
+      structure: 'real', // Estructura real de la BD
     };
     
-    console.log('Obteniendo todas las colecciones...');
+    console.log('Obteniendo propiedades principales...');
     
-    // Lista de colecciones principales de alquileres
-    const mainCollections = ['properties', 'units', 'guarantees', 'services'];
+    // 1. Obtener todas las propiedades
+    const propertiesRef = admin.firestore().collection('properties');
+    const propertiesSnapshot = await propertiesRef.get();
+    const properties = [];
     
-    // Procesar colecciones simples
-    for (const collectionName of mainCollections) {
-      console.log(`Procesando colección: ${collectionName}`);
-      
-      try {
-        const collectionRef = admin.firestore().collection(collectionName);
-        const documents = await getAllDocuments(collectionRef);
-        backupData[collectionName] = documents;
-        
-        console.log(`${collectionName}: ${documents.length} documentos`);
-      } catch (collectionError) {
-        console.error(`Error al procesar colección ${collectionName}:`, collectionError.message);
-        backupData[collectionName] = [];
-      }
-    }
-    
-    // Procesar transacciones (colección jerárquica)
-    console.log('Procesando transacciones (estructura jerárquica)...');
-    try {
-      backupData.transactions = await getHierarchicalData('transactions');
-      
-      // Calcular total de transacciones
-      const totalTransactions = Object.values(backupData.transactions).reduce((sum, periodDocs) => {
-        return sum + (Array.isArray(periodDocs) ? periodDocs.length : 0);
-      }, 0);
-      
-      console.log(`transactions: ${totalTransactions} documentos en ${Object.keys(backupData.transactions).length} períodos`);
-    } catch (error) {
-      console.error('Error al procesar transacciones:', error.message);
-      backupData.transactions = {};
-    }
-    
-    // Generar estadísticas
-    const stats = {};
-    
-    // Estadísticas de colecciones simples
-    mainCollections.forEach(collectionName => {
-      stats[collectionName] = backupData[collectionName] ? backupData[collectionName].length : 0;
+    propertiesSnapshot.forEach(doc => {
+      properties.push({
+        id: doc.id,
+        ...processFirestoreData(doc.data())
+      });
     });
     
-    // Estadísticas de transacciones
-    const hierarchicalData = backupData.transactions || {};
-    const totalDocs = Object.values(hierarchicalData).reduce((sum, periodDocs) => {
-      return sum + (Array.isArray(periodDocs) ? periodDocs.length : 0);
-    }, 0);
-    stats.transactions = totalDocs;
-    stats.transactionPeriods = Object.keys(hierarchicalData).length;
+    backupData.properties = properties;
+    console.log(`Properties: ${properties.length} documentos`);
+    
+    // 2. Obtener collection independiente de units
+    console.log('Obteniendo collection independiente de units...');
+    const unitsRef = admin.firestore().collection('units');
+    const units = await getAllDocuments(unitsRef);
+    backupData.units = units;
+    console.log(`Units (independiente): ${units.length} documentos`);
+    
+    // 3. Si se incluyen detalles, obtener datos completos por propiedad
+    if (includeDetails === 'true') {
+      console.log('Obteniendo datos completos por propiedad...');
+      
+      const propertiesData = {};
+      let totalExpenses = 0;
+      let totalIncomes = 0;
+      let totalExpensePeriods = 0;
+      let totalIncomePeriods = 0;
+      
+      for (const property of properties) {
+        console.log(`Procesando propiedad: ${property.name || property.id}`);
+        
+        const completeData = await getCompletePropertyData(property.id, property);
+        
+        // Contar estadísticas
+        const expensePeriods = Object.keys(completeData.expenses || {}).length;
+        const expenseItems = Object.values(completeData.expenses || {}).reduce((sum, items) => 
+          sum + (Array.isArray(items) ? items.length : 0), 0);
+        
+        let unitIncomes = 0;
+        let unitIncomePeriods = 0;
+        
+        (completeData.units || []).forEach(unit => {
+          const incomePeriods = Object.keys(unit.incomes || {}).length;
+          unitIncomePeriods += incomePeriods;
+          unitIncomes += incomePeriods; // Cada período es un income
+        });
+        
+        totalExpenses += expenseItems;
+        totalIncomes += unitIncomes;
+        totalExpensePeriods += expensePeriods;
+        totalIncomePeriods += unitIncomePeriods;
+        
+        propertiesData[property.id] = completeData;
+        
+        console.log(`  • ${property.name || property.id}: ${expenseItems} expenses en ${expensePeriods} períodos, ${unitIncomes} incomes en ${unitIncomePeriods} períodos`);
+      }
+      
+      backupData.propertiesData = propertiesData;
+      
+      // Estadísticas detalladas
+      backupData.detailedStats = {
+        totalExpenses,
+        totalIncomes,
+        totalExpensePeriods,
+        totalIncomePeriods,
+        propertiesWithData: Object.keys(propertiesData).length
+      };
+    }
+    
+    // Generar estadísticas básicas
+    const stats = {
+      properties: properties.length,
+      unitsIndependent: units.length
+    };
+    
+    if (backupData.detailedStats) {
+      Object.assign(stats, backupData.detailedStats);
+    }
     
     backupData.stats = stats;
     
@@ -231,7 +291,7 @@ router.get('/', async (req, res) => {
     
     // Configurar headers para descarga
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `alquileres-backup-${timestamp}.json`;
+    const filename = `alquileres-backup-real-${timestamp}.json`;
     
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -253,26 +313,12 @@ router.get('/', async (req, res) => {
  * @swagger
  * /api/backup/collections:
  *   get:
- *     summary: Listar colecciones disponibles para backup (Alquileres)
- *     description: Obtiene una lista de todas las colecciones disponibles en el sistema de alquileres
+ *     summary: Listar colecciones disponibles (Estructura Real)
+ *     description: Lista todas las colecciones según la estructura real de alquileres
  *     tags: [Backup]
  *     responses:
  *       200:
  *         description: Lista de colecciones obtenida exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 collections:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       name:
- *                         type: string
- *                       documentCount:
- *                         type: number
  *       500:
  *         description: Error interno del servidor
  */
@@ -280,52 +326,92 @@ router.get('/collections', async (req, res) => {
   try {
     const collections = [];
     
-    // Lista de colecciones principales
-    const mainCollections = ['properties', 'units', 'guarantees', 'services', 'transactions'];
+    // 1. Properties (principal)
+    const propertiesRef = admin.firestore().collection('properties');
+    const propertiesSnapshot = await propertiesRef.get();
+    collections.push({
+      name: 'properties',
+      documentCount: propertiesSnapshot.size,
+      type: 'main',
+      path: 'properties'
+    });
     
-    for (const collectionName of mainCollections) {
-      try {
-        if (collectionName === 'transactions') {
-          // Para transacciones, contar documentos en todos los períodos
-          const hierarchicalData = await getHierarchicalData('transactions');
-          const totalDocs = Object.values(hierarchicalData).reduce((sum, periodDocs) => {
-            return sum + (Array.isArray(periodDocs) ? periodDocs.length : 0);
-          }, 0);
-          
-          collections.push({
-            name: collectionName,
-            documentCount: totalDocs,
-            type: 'hierarchical',
-            periods: Object.keys(hierarchicalData).length,
-            path: collectionName
-          });
-        } else {
-          // Para otras colecciones, contar directamente
-          const collectionRef = admin.firestore().collection(collectionName);
-          const snapshot = await collectionRef.get();
-          
-          collections.push({
-            name: collectionName,
-            documentCount: snapshot.size,
-            type: 'simple',
-            path: collectionName
-          });
-        }
-      } catch (error) {
-        console.warn(`Error al contar documentos en ${collectionName}:`, error.message);
-        collections.push({
-          name: collectionName,
-          documentCount: 0,
-          type: 'unknown',
-          error: error.message
-        });
+    // 2. Units (independiente)
+    const unitsRef = admin.firestore().collection('units');
+    const unitsSnapshot = await unitsRef.get();
+    collections.push({
+      name: 'units',
+      documentCount: unitsSnapshot.size,
+      type: 'independent',
+      path: 'units'
+    });
+    
+    // 3. Analizar estructura jerárquica por propiedad
+    let totalExpenses = 0;
+    let totalIncomes = 0;
+    let totalExpensePeriods = 0;
+    let totalIncomePeriods = 0;
+    
+    for (const propertyDoc of propertiesSnapshot.docs) {
+      const propertyId = propertyDoc.id;
+      
+      // Contar expenses
+      const { listExpensePeriods, getPropertyUnits, listIncomePeriods } = require('../../utils/hierarchicalPath');
+      
+      const expensePeriods = await listExpensePeriods(admin.firestore(), propertyId);
+      totalExpensePeriods += expensePeriods.length;
+      
+      for (const period of expensePeriods) {
+        const expensesRef = admin.firestore()
+          .collection('properties')
+          .doc(propertyId)
+          .collection('expenses')
+          .doc(period.periodKey)
+          .collection('items');
+        
+        const expensesSnapshot = await expensesRef.get();
+        totalExpenses += expensesSnapshot.size;
+      }
+      
+      // Contar incomes por unidades
+      const propertyUnits = await getPropertyUnits(admin.firestore(), propertyId);
+      
+      for (const unit of propertyUnits) {
+        const incomePeriods = await listIncomePeriods(admin.firestore(), propertyId, unit.id);
+        totalIncomePeriods += incomePeriods.length;
+        totalIncomes += incomePeriods.length; // Cada período es un documento
       }
     }
+    
+    // Agregar resúmenes jerárquicos
+    collections.push({
+      name: 'expenses',
+      documentCount: totalExpenses,
+      type: 'hierarchical',
+      path: 'properties/{propertyId}/expenses/{year-month}/items/',
+      periods: totalExpensePeriods
+    });
+    
+    collections.push({
+      name: 'incomes',
+      documentCount: totalIncomes,
+      type: 'hierarchical',
+      path: 'properties/{propertyId}/units/{unitId}/incomes/{year-month}',
+      periods: totalIncomePeriods
+    });
     
     return res.status(200).json({
       collections,
       totalCollections: collections.length,
-      structure: 'simple' // Sin userId
+      structure: 'real', // Estructura real
+      summary: {
+        properties: propertiesSnapshot.size,
+        units: unitsSnapshot.size,
+        expenses: totalExpenses,
+        incomes: totalIncomes,
+        expensePeriods: totalExpensePeriods,
+        incomePeriods: totalIncomePeriods
+      }
     });
     
   } catch (error) {
@@ -339,71 +425,57 @@ router.get('/collections', async (req, res) => {
 
 /**
  * @swagger
- * /api/backup/collection/{collectionName}:
+ * /api/backup/property/{propertyId}:
  *   get:
- *     summary: Backup de una colección específica (Alquileres)
- *     description: Exporta solo los datos de una colección específica del sistema de alquileres
+ *     summary: Backup de una propiedad específica con todos sus datos
+ *     description: Exporta datos completos de una propiedad (expenses + units con incomes)
  *     tags: [Backup]
  *     parameters:
  *       - in: path
- *         name: collectionName
+ *         name: propertyId
  *         required: true
  *         schema:
  *           type: string
- *         description: Nombre de la colección a exportar
+ *         description: ID de la propiedad
  *     responses:
  *       200:
- *         description: Backup de colección generado exitosamente
+ *         description: Backup de propiedad generado exitosamente
  *       404:
- *         description: Colección no encontrada
+ *         description: Propiedad no encontrada
  *       500:
  *         description: Error interno del servidor
  */
-router.get('/collection/:collectionName', async (req, res) => {
+router.get('/property/:propertyId', async (req, res) => {
   try {
-    const { collectionName } = req.params;
+    const { propertyId } = req.params;
     
-    let backupData;
+    // Verificar que la propiedad existe
+    const propertyDoc = await admin.firestore()
+      .collection('properties')
+      .doc(propertyId)
+      .get();
     
-    // Verificar si es una colección jerárquica
-    if (collectionName === 'transactions') {
-      // Colección jerárquica
-      const hierarchicalData = await getHierarchicalData('transactions');
-      
-      if (Object.keys(hierarchicalData).length === 0) {
-        return res.status(404).json({ error: 'Colección no encontrada o vacía' });
-      }
-      
-      backupData = {
-        collection: collectionName,
-        exportDate: new Date().toISOString(),
-        isHierarchical: true,
-        periods: Object.keys(hierarchicalData).length,
-        totalDocuments: Object.values(hierarchicalData).reduce((sum, periodDocs) => 
-          sum + (Array.isArray(periodDocs) ? periodDocs.length : 0), 0),
-        data: hierarchicalData
-      };
-    } else {
-      // Colección simple
-      const collectionRef = admin.firestore().collection(collectionName);
-      const documents = await getAllDocuments(collectionRef);
-      
-      if (documents.length === 0) {
-        return res.status(404).json({ error: 'Colección no encontrada o vacía' });
-      }
-      
-      backupData = {
-        collection: collectionName,
-        exportDate: new Date().toISOString(),
-        isHierarchical: false,
-        count: documents.length,
-        data: documents
-      };
+    if (!propertyDoc.exists) {
+      return res.status(404).json({ error: 'Propiedad no encontrada' });
     }
+    
+    const propertyData = {
+      id: propertyDoc.id,
+      ...processFirestoreData(propertyDoc.data())
+    };
+    
+    // Obtener datos completos
+    const completeData = await getCompletePropertyData(propertyId, propertyData);
+    
+    const backupData = {
+      propertyId,
+      exportDate: new Date().toISOString(),
+      data: completeData
+    };
     
     // Configurar headers para descarga
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `alquileres-${collectionName}-backup-${timestamp}.json`;
+    const filename = `alquileres-property-${propertyId}-${timestamp}.json`;
     
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -412,7 +484,7 @@ router.get('/collection/:collectionName', async (req, res) => {
     return res.status(200).json(backupData);
     
   } catch (error) {
-    console.error('Error al generar backup de colección:', error);
+    console.error('Error al generar backup de propiedad:', error);
     return res.status(500).json({ 
       error: 'Error interno del servidor',
       details: error.message 

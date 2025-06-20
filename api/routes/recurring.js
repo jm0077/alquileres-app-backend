@@ -9,8 +9,8 @@ const recurringService = new AlquileresRecurringService();
  * @swagger
  * /api/recurring/generate:
  *   post:
- *     summary: Genera transacciones recurrentes para el próximo mes (Alquileres)
- *     description: Crea automáticamente egresos recurrentes para el mes siguiente basándose en el mes actual
+ *     summary: Genera expenses recurrentes para el próximo mes (Estructura Real)
+ *     description: Crea automáticamente expenses recurrentes para el mes siguiente basándose en el mes actual. Procesa todas las propiedades.
  *     tags: [Recurring]
  *     requestBody:
  *       required: false
@@ -79,7 +79,7 @@ router.post('/generate', async (req, res) => {
       });
     }
     
-    console.log(`Iniciando generación de registros recurrentes de alquileres`, options);
+    console.log(`Iniciando generación de registros recurrentes de alquileres (estructura real)`, options);
     
     // Generar registros
     const result = await recurringService.generateRecurringRecords(options);
@@ -106,8 +106,8 @@ router.post('/generate', async (req, res) => {
  * @swagger
  * /api/recurring/summary:
  *   get:
- *     summary: Obtiene resumen de datos disponibles para un período (Alquileres)
- *     description: Muestra qué transacciones están disponibles en un mes específico
+ *     summary: Obtiene resumen de datos disponibles para un período (Estructura Real)
+ *     description: Muestra qué expenses están disponibles en un mes específico para todas las propiedades
  *     tags: [Recurring]
  *     parameters:
  *       - in: query
@@ -177,7 +177,7 @@ router.get('/summary', async (req, res) => {
  * @swagger
  * /api/recurring/validate:
  *   post:
- *     summary: Valida si es posible generar registros para un período (Alquileres)
+ *     summary: Valida si es posible generar registros para un período (Estructura Real)
  *     description: Verifica requisitos y dependencias antes de generar registros
  *     tags: [Recurring]
  *     requestBody:
@@ -242,19 +242,19 @@ router.post('/validate', async (req, res) => {
       errors.push('Error al obtener datos del período fuente');
       canGenerate = false;
     } else {
-      const recurringExpenses = sourceData.summary.transactions.recurringExpenses;
+      const recurringExpenses = sourceData.summary.totalRecurringExpenses;
       
       if (recurringExpenses === 0) {
-        warnings.push('No hay egresos recurrentes en el período fuente');
+        warnings.push('No hay expenses recurrentes en el período fuente');
       }
     }
     
     // Verificar datos en período destino
     if (targetData.success) {
-      const totalActiveTarget = targetData.summary.transactions.total;
+      const totalActiveTarget = targetData.summary.totalExpenses;
       
       if (totalActiveTarget > 0) {
-        warnings.push(`Ya existen ${totalActiveTarget} transacciones en el período destino`);
+        warnings.push(`Ya existen ${totalActiveTarget} expenses en el período destino`);
       }
     }
     
@@ -293,10 +293,10 @@ router.post('/validate', async (req, res) => {
 
 /**
  * @swagger
- * /api/recurring/transactions/{year}/{month}/recurring:
+ * /api/recurring/expenses/{year}/{month}/recurring:
  *   get:
- *     summary: Obtiene transacciones recurrentes de un período específico
- *     description: Lista todas las transacciones marcadas como recurrentes en un mes
+ *     summary: Obtiene todos los expenses recurrentes de un período específico
+ *     description: Lista todos los expenses marcados como recurrentes en un mes de todas las propiedades
  *     tags: [Recurring]
  *     parameters:
  *       - in: path
@@ -319,7 +319,7 @@ router.post('/validate', async (req, res) => {
  *       500:
  *         description: Error interno del servidor
  */
-router.get('/transactions/:year/:month/recurring', async (req, res) => {
+router.get('/expenses/:year/:month/recurring', async (req, res) => {
   try {
     const { year, month } = req.params;
     
@@ -340,13 +340,13 @@ router.get('/transactions/:year/:month/recurring', async (req, res) => {
       });
     }
     
-    // Obtener transacciones recurrentes
-    const result = await recurringService.getRecurringTransactions(yearNum, monthNum);
+    // Obtener todos los expenses recurrentes
+    const result = await recurringService.getAllRecurringExpenses(yearNum, monthNum);
     
     return res.status(200).json(result);
     
   } catch (error) {
-    console.error('Error en endpoint de transacciones recurrentes:', error);
+    console.error('Error en endpoint de expenses recurrentes:', error);
     return res.status(500).json({
       success: false,
       error: 'Error interno del servidor',
@@ -357,12 +357,88 @@ router.get('/transactions/:year/:month/recurring', async (req, res) => {
 
 /**
  * @swagger
- * /api/recurring/transactions/{year}/{month}/{transactionId}/recurring:
- *   put:
- *     summary: Marca o desmarca una transacción como recurrente
- *     description: Actualiza el estado de recurrencia de una transacción específica
+ * /api/recurring/properties/{propertyId}/expenses/{year}/{month}/recurring:
+ *   get:
+ *     summary: Obtiene expenses recurrentes de una propiedad específica
+ *     description: Lista todos los expenses marcados como recurrentes en un mes de una propiedad
  *     tags: [Recurring]
  *     parameters:
+ *       - in: path
+ *         name: propertyId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID de la propiedad
+ *       - in: path
+ *         name: year
+ *         required: true
+ *         schema:
+ *           type: number
+ *         description: Año
+ *       - in: path
+ *         name: month
+ *         required: true
+ *         schema:
+ *           type: number
+ *         description: Mes
+ *     responses:
+ *       200:
+ *         description: Lista obtenida exitosamente
+ *       400:
+ *         description: Error en los parámetros
+ *       500:
+ *         description: Error interno del servidor
+ */
+router.get('/properties/:propertyId/expenses/:year/:month/recurring', async (req, res) => {
+  try {
+    const { propertyId, year, month } = req.params;
+    
+    const yearNum = parseInt(year);
+    const monthNum = parseInt(month);
+    
+    if (yearNum < 2020 || yearNum > 2030) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'year debe estar entre 2020 y 2030' 
+      });
+    }
+    
+    if (monthNum < 1 || monthNum > 12) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'month debe estar entre 1 y 12' 
+      });
+    }
+    
+    // Obtener expenses recurrentes de la propiedad
+    const result = await recurringService.getRecurringExpenses(propertyId, yearNum, monthNum);
+    
+    return res.status(200).json(result);
+    
+  } catch (error) {
+    console.error('Error en endpoint de expenses recurrentes por propiedad:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /api/recurring/properties/{propertyId}/expenses/{year}/{month}/{expenseId}/recurring:
+ *   put:
+ *     summary: Marca o desmarca un expense como recurrente
+ *     description: Actualiza el estado de recurrencia de un expense específico
+ *     tags: [Recurring]
+ *     parameters:
+ *       - in: path
+ *         name: propertyId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID de la propiedad
  *       - in: path
  *         name: year
  *         required: true
@@ -376,11 +452,11 @@ router.get('/transactions/:year/:month/recurring', async (req, res) => {
  *           type: number
  *         description: Mes
  *       - in: path
- *         name: transactionId
+ *         name: expenseId
  *         required: true
  *         schema:
  *           type: string
- *         description: ID de la transacción
+ *         description: ID del expense
  *     requestBody:
  *       required: true
  *       content:
@@ -390,7 +466,7 @@ router.get('/transactions/:year/:month/recurring', async (req, res) => {
  *             properties:
  *               isRecurring:
  *                 type: boolean
- *                 description: Si la transacción debe ser recurrente
+ *                 description: Si el expense debe ser recurrente
  *             required:
  *               - isRecurring
  *     responses:
@@ -401,16 +477,16 @@ router.get('/transactions/:year/:month/recurring', async (req, res) => {
  *       500:
  *         description: Error interno del servidor
  */
-router.put('/transactions/:year/:month/:transactionId/recurring', async (req, res) => {
+router.put('/properties/:propertyId/expenses/:year/:month/:expenseId/recurring', async (req, res) => {
   try {
-    const { year, month, transactionId } = req.params;
+    const { propertyId, year, month, expenseId } = req.params;
     const { isRecurring } = req.body;
     
     // Validar parámetros
-    if (!transactionId) {
+    if (!propertyId || !expenseId) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Se requiere transactionId' 
+        error: 'Se requiere propertyId y expenseId' 
       });
     }
     
@@ -439,8 +515,8 @@ router.put('/transactions/:year/:month/:transactionId/recurring', async (req, re
     }
     
     // Actualizar estado de recurrencia
-    const result = await recurringService.setTransactionRecurring(
-      yearNum, monthNum, transactionId, isRecurring
+    const result = await recurringService.setExpenseRecurring(
+      propertyId, yearNum, monthNum, expenseId, isRecurring
     );
     
     return res.status(200).json(result);
@@ -459,7 +535,7 @@ router.put('/transactions/:year/:month/:transactionId/recurring', async (req, re
  * @swagger
  * /api/recurring/health:
  *   get:
- *     summary: Verifica el estado del servicio de generación recurrente (Alquileres)
+ *     summary: Verifica el estado del servicio de generación recurrente (Estructura Real)
  *     description: Endpoint de salud para verificar que el servicio está funcionando
  *     tags: [Recurring]
  *     responses:
@@ -472,8 +548,15 @@ router.get('/health', async (req, res) => {
       success: true,
       service: 'AlquileresRecurringService',
       timestamp: new Date().toISOString(),
-      version: '1.0.0',
-      note: 'Estructura sin userId - acceso directo a colecciones'
+      version: '2.0.0',
+      structure: 'real',
+      note: 'Adaptado para la estructura real de la base de datos',
+      supportedOperations: [
+        'Generate recurring expenses by property',
+        'Mark expenses as recurring/non-recurring',
+        'Get summary by period across all properties',
+        'Validate generation feasibility'
+      ]
     });
   } catch (error) {
     return res.status(500).json({

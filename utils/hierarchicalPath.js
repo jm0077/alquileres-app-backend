@@ -1,6 +1,6 @@
 /**
  * Utilidades para gestionar rutas jerárquicas en Firestore
- * Versión SIN userId para Alquileres App
+ * Adaptado para la estructura REAL de alquileres
  */
 
 /**
@@ -17,171 +17,251 @@ function getStoragePath(date) {
     month,
     yearStr: year.toString(),
     monthStr: month.toString().padStart(2, '0'),
-    path: `${year}/${month.toString().padStart(2, '0')}`
+    path: `${year}-${month.toString().padStart(2, '0')}` // Formato: 2025-06
   };
 }
 
 /**
- * Obtiene referencia a colección con estructura jerárquica SIN userId
- * Para alquileres: transactions (por año/mes), otras colecciones directas
+ * Obtiene referencia a colección con estructura jerárquica REAL
+ * Estructura: properties/{propertyId}/expenses/{year-month}/items/
+ * Estructura: properties/{propertyId}/units/{unitId}/incomes/{year-month}/
  * @param {Firestore} db - Instancia de Firestore
- * @param {string} collectionName - Nombre de la colección (transactions, properties, units, etc.)
- * @param {number|string} year - Año (opcional, solo para transactions)
- * @param {number|string} month - Mes (opcional, solo para transactions)
+ * @param {string} type - Tipo: 'expenses' | 'incomes' | 'units' | 'properties'
+ * @param {string} propertyId - ID de la propiedad (opcional para 'units')
+ * @param {string} unitId - ID de la unidad (solo para incomes)
+ * @param {number|string} year - Año (opcional)
+ * @param {number|string} month - Mes (opcional)
  * @returns {CollectionReference} - Referencia a la colección
  */
-function getCollection(db, collectionName, year, month) {
-  // Para transacciones, usar estructura jerárquica
-  if (collectionName === 'transactions') {
-    if (!year) {
-      return db.collection('transactions');
-    }
-    
-    const yearStr = year.toString();
-    const yearRef = db.collection('transactions').doc(yearStr);
-    
-    if (!month) {
-      return yearRef.collection('documents');
-    }
-    
-    const monthStr = month.toString().padStart(2, '0');
-    return yearRef.collection(monthStr);
+function getCollection(db, type, propertyId, unitId, year, month) {
+  
+  if (type === 'properties') {
+    // Colección principal de propiedades
+    return db.collection('properties');
   }
   
-  // Para otras colecciones, usar estructura simple
-  return db.collection(collectionName);
+  if (type === 'units') {
+    // Colección independiente de unidades
+    return db.collection('units');
+  }
+  
+  if (type === 'expenses') {
+    // Estructura: properties/{propertyId}/expenses/{year-month}/items/
+    if (!propertyId) {
+      throw new Error('propertyId es requerido para expenses');
+    }
+    
+    const propertyRef = db.collection('properties').doc(propertyId);
+    
+    if (!year || !month) {
+      // Retornar la colección base de expenses
+      return propertyRef.collection('expenses');
+    }
+    
+    const periodKey = `${year}-${month.toString().padStart(2, '0')}`;
+    return propertyRef
+      .collection('expenses')
+      .doc(periodKey)
+      .collection('items');
+  }
+  
+  if (type === 'incomes') {
+    // Estructura: properties/{propertyId}/units/{unitId}/incomes/{year-month}/
+    if (!propertyId || !unitId) {
+      throw new Error('propertyId y unitId son requeridos para incomes');
+    }
+    
+    const unitRef = db.collection('properties')
+      .doc(propertyId)
+      .collection('units')
+      .doc(unitId);
+    
+    if (!year || !month) {
+      // Retornar la colección base de incomes
+      return unitRef.collection('incomes');
+    }
+    
+    const periodKey = `${year}-${month.toString().padStart(2, '0')}`;
+    return unitRef.collection('incomes').doc(periodKey);
+  }
+  
+  throw new Error(`Tipo no soportado: ${type}`);
 }
 
 /**
- * Consulta documentos a través de múltiples colecciones mensuales
+ * Lista todos los períodos disponibles para expenses de una propiedad
  * @param {Firestore} db - Instancia de Firestore
- * @param {string} collectionName - Nombre de la colección
- * @param {Object} options - Opciones de consulta
- * @param {number|string} options.startYear - Año inicial
- * @param {number|string} options.startMonth - Mes inicial
- * @param {number|string} options.endYear - Año final
- * @param {number|string} options.endMonth - Mes final
- * @param {Array} options.where - Condiciones where [[campo, operador, valor], ...]
- * @returns {Promise<Array>} - Array de documentos encontrados
+ * @param {string} propertyId - ID de la propiedad
+ * @returns {Promise<Array>} - Array de períodos disponibles {year, month}
  */
-async function queryAcrossPeriods(db, collectionName, options) {
-  const { 
-    startYear, 
-    startMonth, 
-    endYear = new Date().getFullYear(), 
-    endMonth = new Date().getMonth() + 1,
-    where = []
-  } = options;
-  
-  // Si no se especifica período de inicio, devolver error
-  if (!startYear || !startMonth) {
-    throw new Error('Se requiere startYear y startMonth para consultas cross-period');
-  }
-  
-  const results = [];
-  
-  // Calcular todos los pares año/mes en el rango
-  const periods = [];
-  let currentYear = parseInt(startYear);
-  let currentMonth = parseInt(startMonth);
-  const finalYear = parseInt(endYear);
-  const finalMonth = parseInt(endMonth);
-  
-  while (
-    currentYear < finalYear || 
-    (currentYear === finalYear && currentMonth <= finalMonth)
-  ) {
-    periods.push({
-      year: currentYear,
-      month: currentMonth
+async function listExpensePeriods(db, propertyId) {
+  try {
+    const expensesRef = db.collection('properties')
+      .doc(propertyId)
+      .collection('expenses');
+    
+    const periodsSnapshot = await expensesRef.listDocuments();
+    const periods = [];
+    
+    for (const periodDoc of periodsSnapshot) {
+      const periodKey = periodDoc.id; // Formato: "2025-06"
+      const [year, month] = periodKey.split('-');
+      
+      // Verificar que tiene items
+      const itemsRef = periodDoc.collection('items');
+      const itemsSnapshot = await itemsRef.limit(1).get();
+      
+      if (!itemsSnapshot.empty) {
+        periods.push({
+          year: parseInt(year),
+          month: parseInt(month),
+          periodKey
+        });
+      }
+    }
+    
+    // Ordenar por fecha
+    return periods.sort((a, b) => {
+      if (a.year !== b.year) return a.year - b.year;
+      return a.month - b.month;
     });
-    
-    // Avanzar al siguiente mes
-    currentMonth++;
-    if (currentMonth > 12) {
-      currentMonth = 1;
-      currentYear++;
-    }
+  } catch (error) {
+    console.error('Error listando períodos de expenses:', error);
+    return [];
   }
-  
-  // Consultar cada período
-  for (const period of periods) {
-    const collectionRef = getCollection(
-      db, 
-      collectionName, 
-      period.year, 
-      period.month
-    );
+}
+
+/**
+ * Lista todos los períodos disponibles para incomes de una unidad
+ * @param {Firestore} db - Instancia de Firestore
+ * @param {string} propertyId - ID de la propiedad
+ * @param {string} unitId - ID de la unidad
+ * @returns {Promise<Array>} - Array de períodos disponibles {year, month}
+ */
+async function listIncomePeriods(db, propertyId, unitId) {
+  try {
+    const incomesRef = db.collection('properties')
+      .doc(propertyId)
+      .collection('units')
+      .doc(unitId)
+      .collection('incomes');
     
-    // Construir la consulta con las condiciones where
-    let query = collectionRef;
+    const periodsSnapshot = await incomesRef.listDocuments();
+    const periods = [];
     
-    for (const condition of where) {
-      const [field, operator, value] = condition;
-      query = query.where(field, operator, value);
+    for (const periodDoc of periodsSnapshot) {
+      const periodKey = periodDoc.id; // Formato: "2025-06"
+      const [year, month] = periodKey.split('-');
+      
+      periods.push({
+        year: parseInt(year),
+        month: parseInt(month),
+        periodKey
+      });
     }
     
-    // Ejecutar la consulta
-    const snapshot = await query.get();
+    // Ordenar por fecha
+    return periods.sort((a, b) => {
+      if (a.year !== b.year) return a.year - b.year;
+      return a.month - b.month;
+    });
+  } catch (error) {
+    console.error('Error listando períodos de incomes:', error);
+    return [];
+  }
+}
+
+/**
+ * Obtiene todas las unidades de una propiedad
+ * @param {Firestore} db - Instancia de Firestore  
+ * @param {string} propertyId - ID de la propiedad
+ * @returns {Promise<Array>} - Array de unidades
+ */
+async function getPropertyUnits(db, propertyId) {
+  try {
+    const unitsRef = db.collection('properties')
+      .doc(propertyId)
+      .collection('units');
     
-    // Añadir resultados
+    const snapshot = await unitsRef.get();
+    const units = [];
+    
     snapshot.forEach(doc => {
-      results.push({
+      units.push({
         id: doc.id,
-        year: period.year,
-        month: period.month,
         ...doc.data()
       });
     });
+    
+    return units;
+  } catch (error) {
+    console.error('Error obteniendo unidades de la propiedad:', error);
+    return [];
   }
-  
-  return results;
 }
 
 /**
- * Genera una lista de todas las colecciones mensuales para un tipo de colección
- * Útil para obtener un índice de qué meses tienen datos
+ * Obtiene todos los expenses de una propiedad en un período
  * @param {Firestore} db - Instancia de Firestore
- * @param {string} collectionName - Nombre de la colección
- * @returns {Promise<Array>} - Array de períodos disponibles {year, month}
+ * @param {string} propertyId - ID de la propiedad
+ * @param {number} year - Año
+ * @param {number} month - Mes
+ * @returns {Promise<Array>} - Array de expenses
  */
-async function listAvailablePeriods(db, collectionName) {
-  // Solo aplicable para colecciones jerárquicas (transactions)
-  if (collectionName !== 'transactions') {
+async function getExpenses(db, propertyId, year, month) {
+  try {
+    const expensesRef = getCollection(db, 'expenses', propertyId, null, year, month);
+    const snapshot = await expensesRef.get();
+    const expenses = [];
+    
+    snapshot.forEach(doc => {
+      expenses.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    return expenses;
+  } catch (error) {
+    console.error('Error obteniendo expenses:', error);
     return [];
   }
-  
-  const baseCollectionRef = db.collection('transactions');
-  
-  // Obtener todos los documentos de año
-  const yearsSnapshot = await baseCollectionRef.listDocuments();
-  const periods = [];
-  
-  for (const yearDoc of yearsSnapshot) {
-    const year = yearDoc.id;
+}
+
+/**
+ * Obtiene todos los incomes de una unidad en un período
+ * @param {Firestore} db - Instancia de Firestore
+ * @param {string} propertyId - ID de la propiedad
+ * @param {string} unitId - ID de la unidad
+ * @param {number} year - Año
+ * @param {number} month - Mes
+ * @returns {Promise<Object>} - Datos del documento de income
+ */
+async function getIncomes(db, propertyId, unitId, year, month) {
+  try {
+    const incomeRef = getCollection(db, 'incomes', propertyId, unitId, year, month);
+    const doc = await incomeRef.get();
     
-    // Obtener todos los documentos de mes para este año
-    const monthsSnapshot = await yearDoc.listCollections();
-    
-    for (const monthCollection of monthsSnapshot) {
-      const month = monthCollection.id;
-      periods.push({
-        year: parseInt(year),
-        month: parseInt(month)
-      });
+    if (doc.exists) {
+      return {
+        id: doc.id,
+        ...doc.data()
+      };
     }
+    
+    return null;
+  } catch (error) {
+    console.error('Error obteniendo incomes:', error);
+    return null;
   }
-  
-  // Ordenar por fecha
-  return periods.sort((a, b) => {
-    if (a.year !== b.year) return a.year - b.year;
-    return a.month - b.month;
-  });
 }
 
 module.exports = {
   getStoragePath,
   getCollection,
-  queryAcrossPeriods,
-  listAvailablePeriods
+  listExpensePeriods,
+  listIncomePeriods,
+  getPropertyUnits,
+  getExpenses,
+  getIncomes
 };

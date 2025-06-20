@@ -1,10 +1,15 @@
 /**
  * Servicio para generar automáticamente registros recurrentes mensuales para Alquileres
- * Versión SIN userId - estructura simple
- * Maneja transacciones recurrentes (egresos que se repiten cada mes)
+ * Adaptado para la estructura REAL de la base de datos
+ * Maneja expenses recurrentes por propiedad
  */
 const admin = require('../config/firebase');
-const { getStoragePath, getCollection } = require('../utils/hierarchicalPath');
+const { 
+  getStoragePath, 
+  getCollection, 
+  listExpensePeriods, 
+  getExpenses 
+} = require('../utils/hierarchicalPath');
 
 const db = admin.firestore();
 
@@ -15,6 +20,7 @@ class AlquileresRecurringService {
 
   /**
    * Genera registros para el próximo mes basándose en los datos del mes anterior
+   * Solo procesa EXPENSES (no incomes, que son por unidad y requieren intervención manual)
    * @param {Object} options - Opciones de generación
    * @param {number} options.targetYear - Año destino (opcional, por defecto siguiente mes)
    * @param {number} options.targetMonth - Mes destino (opcional, por defecto siguiente mes)
@@ -25,7 +31,7 @@ class AlquileresRecurringService {
    */
   async generateRecurringRecords(options = {}) {
     try {
-      console.log(`Iniciando generación de registros recurrentes de alquileres...`);
+      console.log(`Iniciando generación de registros recurrentes de alquileres (estructura real)...`);
       
       // Determinar fechas fuente y destino
       const dates = this._calculateDates(options);
@@ -33,32 +39,59 @@ class AlquileresRecurringService {
       
       console.log(`Generando desde ${sourceYear}/${sourceMonth} hacia ${targetYear}/${targetMonth}`);
       
-      // Verificar si ya existen datos en el mes destino
-      const existingCheck = await this._checkExistingData(targetYear, targetMonth);
+      // Obtener todas las propiedades
+      const properties = await this._getAllProperties();
       
-      if (existingCheck.hasData) {
-        console.log('Advertencia: Ya existen algunas transacciones en el mes destino');
+      if (properties.length === 0) {
+        return {
+          success: false,
+          error: 'No se encontraron propiedades'
+        };
       }
       
-      // Generar transacciones recurrentes (solo egresos)
+      console.log(`Procesando ${properties.length} propiedades`);
+      
+      // Procesar cada propiedad
       const results = {
-        transactions: await this._generateRecurringTransactions(
-          sourceYear, sourceMonth, targetYear, targetMonth, options.dryRun
-        ),
+        expenses: { created: 0, skipped: 0, errors: [] },
         summary: {
           sourceYear,
           sourceMonth,
           targetYear,
           targetMonth,
           dryRun: options.dryRun || false,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          propertiesProcessed: 0
         }
       };
       
+      for (const property of properties) {
+        try {
+          console.log(`Procesando propiedad: ${property.name || property.id}`);
+          
+          const propertyResult = await this._generateRecurringExpenses(
+            property.id, sourceYear, sourceMonth, targetYear, targetMonth, options.dryRun
+          );
+          
+          results.expenses.created += propertyResult.created;
+          results.expenses.skipped += propertyResult.skipped;
+          results.expenses.errors.push(...propertyResult.errors);
+          results.summary.propertiesProcessed++;
+          
+        } catch (error) {
+          console.error(`Error procesando propiedad ${property.id}:`, error);
+          results.expenses.errors.push({
+            type: 'property',
+            propertyId: property.id,
+            error: error.message
+          });
+        }
+      }
+      
       // Calcular totales
-      results.summary.totalCreated = results.transactions.created;
-      results.summary.totalSkipped = results.transactions.skipped;
-      results.summary.totalErrors = results.transactions.errors.length;
+      results.summary.totalCreated = results.expenses.created;
+      results.summary.totalSkipped = results.expenses.skipped;
+      results.summary.totalErrors = results.expenses.errors.length;
       
       console.log(`Generación completada. Creados: ${results.summary.totalCreated}, Omitidos: ${results.summary.totalSkipped}, Errores: ${results.summary.totalErrors}`);
       
@@ -74,6 +107,117 @@ class AlquileresRecurringService {
         error: error.message,
         stack: error.stack
       };
+    }
+  }
+
+  /**
+   * Obtiene todas las propiedades
+   * @private
+   */
+  async _getAllProperties() {
+    try {
+      const propertiesRef = this.db.collection('properties');
+      const snapshot = await propertiesRef.get();
+      const properties = [];
+      
+      snapshot.forEach(doc => {
+        properties.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      return properties;
+    } catch (error) {
+      console.error('Error obteniendo propiedades:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Genera expenses recurrentes para una propiedad específica
+   * @private
+   */
+  async _generateRecurringExpenses(propertyId, sourceYear, sourceMonth, targetYear, targetMonth, dryRun = false) {
+    try {
+      console.log(`Generando expenses recurrentes para propiedad ${propertyId}...`);
+      
+      // Obtener expenses del mes fuente que sean recurrentes
+      const sourceExpenses = await getExpenses(this.db, propertyId, sourceYear, sourceMonth);
+      
+      const results = { created: 0, skipped: 0, errors: [] };
+      
+      if (sourceExpenses.length === 0) {
+        console.log(`No se encontraron expenses en el mes fuente para propiedad ${propertyId}`);
+        return results;
+      }
+      
+      // Filtrar solo los recurrentes
+      const recurringExpenses = sourceExpenses.filter(expense => expense.isRecurring === true);
+      
+      if (recurringExpenses.length === 0) {
+        console.log(`No se encontraron expenses recurrentes en el mes fuente para propiedad ${propertyId}`);
+        return results;
+      }
+      
+      console.log(`Encontrados ${recurringExpenses.length} expenses recurrentes en propiedad ${propertyId}`);
+      
+      // Obtener colección destino
+      const targetCollection = getCollection(this.db, 'expenses', propertyId, null, targetYear, targetMonth);
+      
+      // Verificar si ya existen expenses en el mes destino
+      const existingExpenses = await getExpenses(this.db, propertyId, targetYear, targetMonth);
+      
+      for (const expense of recurringExpenses) {
+        try {
+          // Verificar si ya existe un expense similar en el mes destino
+          const duplicateExists = existingExpenses.some(existing => 
+            existing.description === expense.description && 
+            existing.amount === expense.amount
+          );
+          
+          if (duplicateExists) {
+            console.log(`Expense ${expense.description} ya existe en el mes destino`);
+            results.skipped++;
+            continue;
+          }
+          
+          // Crear nuevo registro usando la función de limpieza
+          const newExpenseData = this._cleanDataForNewPeriod(expense, targetYear, targetMonth);
+          
+          // Agregar metadata de recurrencia
+          newExpenseData.generatedFrom = {
+            sourceDocId: expense.id,
+            sourceYear,
+            sourceMonth,
+            propertyId,
+            generatedAt: new Date().toISOString()
+          };
+          
+          if (!dryRun) {
+            await targetCollection.add(newExpenseData);
+          }
+          
+          console.log(`Expense recurrente ${expense.description} generado para ${targetMonth}/${targetYear} en propiedad ${propertyId}`);
+          results.created++;
+          
+        } catch (error) {
+          console.error(`Error procesando expense ${expense.id}:`, error);
+          results.errors.push({
+            type: 'expense',
+            propertyId,
+            expenseId: expense.id,
+            description: expense.description || 'Sin descripción',
+            error: error.message
+          });
+        }
+      }
+      
+      return results;
+      
+    } catch (error) {
+      console.error('Error en _generateRecurringExpenses:', error);
+      return { created: 0, skipped: 0, errors: [{ type: 'expense', propertyId, error: error.message }] };
     }
   }
 
@@ -94,7 +238,7 @@ class AlquileresRecurringService {
     cleanData.year = targetYear;
     cleanData.month = targetMonth;
     
-    // Actualizar fecha de vencimiento al siguiente mes
+    // Actualizar fecha de vencimiento al siguiente mes si existe
     if (cleanData.dueDate) {
       const currentDueDate = new Date(cleanData.dueDate);
       const newDueDate = new Date(currentDueDate);
@@ -103,7 +247,7 @@ class AlquileresRecurringService {
     }
     
     // Resetear estado y fechas de control
-    cleanData.status = 'pending';
+    cleanData.isActive = true;
     cleanData.createdAt = new Date().toISOString();
     cleanData.updatedAt = new Date().toISOString();
     
@@ -139,138 +283,57 @@ class AlquileresRecurringService {
   }
 
   /**
-   * Verifica si ya existen datos en el mes destino
-   * @private
-   */
-  async _checkExistingData(year, month) {
-    try {
-      const collectionRef = getCollection(this.db, 'transactions', year, month);
-      const snapshot = await collectionRef.limit(1).get();
-      const hasData = !snapshot.empty;
-      
-      return { hasData, details: { transactions: hasData } };
-    } catch (error) {
-      console.warn('Error verificando datos existentes:', error);
-      return { hasData: false, details: {} };
-    }
-  }
-
-  /**
-   * Genera transacciones recurrentes para el próximo mes
-   * Solo genera egresos que están marcados como recurrentes
-   * @private
-   */
-  async _generateRecurringTransactions(sourceYear, sourceMonth, targetYear, targetMonth, dryRun = false) {
-    try {
-      console.log('Generando transacciones recurrentes...');
-      
-      // Obtener transacciones del mes fuente que sean egresos y recurrentes
-      const sourceCollection = getCollection(this.db, 'transactions', sourceYear, sourceMonth);
-      const transactionsSnapshot = await sourceCollection
-        .where('type', '==', 'expense')  // Solo egresos
-        .where('isRecurring', '==', true)  // Solo los marcados como recurrentes
-        .get();
-      
-      const results = { created: 0, skipped: 0, errors: [] };
-      
-      if (transactionsSnapshot.empty) {
-        console.log('No se encontraron transacciones recurrentes en el mes fuente');
-        return results;
-      }
-      
-      // Obtener colección destino
-      const targetCollection = getCollection(this.db, 'transactions', targetYear, targetMonth);
-      
-      for (const doc of transactionsSnapshot.docs) {
-        try {
-          const transactionData = doc.data();
-          
-          // Verificar si ya existe una transacción similar en el mes destino
-          // Buscar por descripción y monto para evitar duplicados
-          const existingQuery = await targetCollection
-            .where('description', '==', transactionData.description)
-            .where('amount', '==', transactionData.amount)
-            .where('type', '==', 'expense')
-            .get();
-          
-          if (!existingQuery.empty) {
-            console.log(`Transacción ${transactionData.description} ya existe en el mes destino`);
-            results.skipped++;
-            continue;
-          }
-          
-          // Crear nuevo registro usando la función de limpieza
-          const newTransactionData = this._cleanDataForNewPeriod(transactionData, targetYear, targetMonth);
-          
-          // Agregar metadata de recurrencia
-          newTransactionData.generatedFrom = {
-            sourceDocId: doc.id,
-            sourceYear,
-            sourceMonth,
-            generatedAt: new Date().toISOString()
-          };
-          
-          if (!dryRun) {
-            await targetCollection.add(newTransactionData);
-          }
-          
-          console.log(`Transacción recurrente ${transactionData.description} generada para ${targetMonth}/${targetYear}`);
-          results.created++;
-          
-        } catch (error) {
-          console.error(`Error procesando transacción ${doc.id}:`, error);
-          results.errors.push({
-            type: 'transaction',
-            id: doc.id,
-            description: doc.data().description || 'Sin descripción',
-            error: error.message
-          });
-        }
-      }
-      
-      return results;
-      
-    } catch (error) {
-      console.error('Error en _generateRecurringTransactions:', error);
-      return { created: 0, skipped: 0, errors: [{ type: 'transaction', error: error.message }] };
-    }
-  }
-
-  /**
-   * Obtiene un resumen de los datos disponibles
+   * Obtiene un resumen de los datos disponibles para todas las propiedades
    * @param {number} year - Año
    * @param {number} month - Mes
    * @returns {Promise<Object>} Resumen de datos
    */
   async getDataSummary(year, month) {
     try {
-      const collectionRef = getCollection(this.db, 'transactions', year, month);
-      const snapshot = await collectionRef.get();
+      const properties = await this._getAllProperties();
       
-      const transactions = [];
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        transactions.push({
-          id: doc.id,
-          description: data.description,
-          amount: data.amount,
-          type: data.type,
-          isRecurring: data.isRecurring || false,
-          category: data.category,
-          propertyId: data.propertyId
-        });
-      });
+      let totalExpenses = 0;
+      let totalRecurringExpenses = 0;
+      const propertiesSummary = [];
       
-      // Clasificar transacciones
-      const summary = {
-        transactions: {
-          total: transactions.length,
-          income: transactions.filter(t => t.type === 'income').length,
-          expense: transactions.filter(t => t.type === 'expense').length,
-          recurring: transactions.filter(t => t.isRecurring === true).length,
-          recurringExpenses: transactions.filter(t => t.type === 'expense' && t.isRecurring === true).length,
-          items: transactions
+      for (const property of properties) {
+        try {
+          const expenses = await getExpenses(this.db, property.id, year, month);
+          const recurringExpenses = expenses.filter(e => e.isRecurring === true);
+          
+          totalExpenses += expenses.length;
+          totalRecurringExpenses += recurringExpenses.length;
+          
+          propertiesSummary.push({
+            propertyId: property.id,
+            propertyName: property.name || 'Sin nombre',
+            totalExpenses: expenses.length,
+            recurringExpenses: recurringExpenses.length,
+            expenses: expenses.map(e => ({
+              id: e.id,
+              description: e.description,
+              amount: e.amount,
+              isRecurring: e.isRecurring || false
+            }))
+          });
+        } catch (error) {
+          console.warn(`Error obteniendo expenses de propiedad ${property.id}:`, error.message);
+          propertiesSummary.push({
+            propertyId: property.id,
+            propertyName: property.name || 'Sin nombre',
+            totalExpenses: 0,
+            recurringExpenses: 0,
+            expenses: [],
+            error: error.message
+          });
         }
+      }
+      
+      const summary = {
+        properties: properties.length,
+        totalExpenses,
+        totalRecurringExpenses,
+        propertiesSummary
       };
       
       return {
@@ -290,17 +353,18 @@ class AlquileresRecurringService {
   }
 
   /**
-   * Marca una transacción como recurrente o no recurrente
+   * Marca un expense como recurrente o no recurrente
+   * @param {string} propertyId - ID de la propiedad
    * @param {number} year - Año
    * @param {number} month - Mes
-   * @param {string} transactionId - ID de la transacción
+   * @param {string} expenseId - ID del expense
    * @param {boolean} isRecurring - Si debe ser recurrente
    * @returns {Promise<Object>} Resultado de la operación
    */
-  async setTransactionRecurring(year, month, transactionId, isRecurring) {
+  async setExpenseRecurring(propertyId, year, month, expenseId, isRecurring) {
     try {
-      const collectionRef = getCollection(this.db, 'transactions', year, month);
-      const docRef = collectionRef.doc(transactionId);
+      const collectionRef = getCollection(this.db, 'expenses', propertyId, null, year, month);
+      const docRef = collectionRef.doc(expenseId);
       
       await docRef.update({
         isRecurring,
@@ -309,11 +373,11 @@ class AlquileresRecurringService {
       
       return {
         success: true,
-        message: `Transacción marcada como ${isRecurring ? 'recurrente' : 'no recurrente'}`
+        message: `Expense marcado como ${isRecurring ? 'recurrente' : 'no recurrente'}`
       };
       
     } catch (error) {
-      console.error('Error en setTransactionRecurring:', error);
+      console.error('Error en setExpenseRecurring:', error);
       return {
         success: false,
         error: error.message
@@ -322,37 +386,70 @@ class AlquileresRecurringService {
   }
 
   /**
-   * Obtiene lista de transacciones recurrentes activas
+   * Obtiene lista de expenses recurrentes de una propiedad
+   * @param {string} propertyId - ID de la propiedad
    * @param {number} year - Año
    * @param {number} month - Mes
-   * @returns {Promise<Object>} Lista de transacciones recurrentes
+   * @returns {Promise<Object>} Lista de expenses recurrentes
    */
-  async getRecurringTransactions(year, month) {
+  async getRecurringExpenses(propertyId, year, month) {
     try {
-      const collectionRef = getCollection(this.db, 'transactions', year, month);
-      const snapshot = await collectionRef
-        .where('type', '==', 'expense')
-        .where('isRecurring', '==', true)
-        .get();
+      const expenses = await getExpenses(this.db, propertyId, year, month);
+      const recurringExpenses = expenses.filter(e => e.isRecurring === true);
       
-      const recurringTransactions = [];
-      snapshot.forEach(doc => {
-        recurringTransactions.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
+      return {
+        success: true,
+        propertyId,
+        year,
+        month,
+        count: recurringExpenses.length,
+        expenses: recurringExpenses
+      };
+      
+    } catch (error) {
+      console.error('Error en getRecurringExpenses:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  /**
+   * Obtiene todos los expenses recurrentes de todas las propiedades
+   * @param {number} year - Año
+   * @param {number} month - Mes
+   * @returns {Promise<Object>} Lista de todos los expenses recurrentes
+   */
+  async getAllRecurringExpenses(year, month) {
+    try {
+      const properties = await this._getAllProperties();
+      const allRecurringExpenses = [];
+      
+      for (const property of properties) {
+        const result = await this.getRecurringExpenses(property.id, year, month);
+        if (result.success && result.expenses.length > 0) {
+          allRecurringExpenses.push({
+            propertyId: property.id,
+            propertyName: property.name || 'Sin nombre',
+            expenses: result.expenses
+          });
+        }
+      }
+      
+      const totalCount = allRecurringExpenses.reduce((sum, prop) => sum + prop.expenses.length, 0);
       
       return {
         success: true,
         year,
         month,
-        count: recurringTransactions.length,
-        transactions: recurringTransactions
+        totalCount,
+        propertiesWithRecurring: allRecurringExpenses.length,
+        propertiesData: allRecurringExpenses
       };
       
     } catch (error) {
-      console.error('Error en getRecurringTransactions:', error);
+      console.error('Error en getAllRecurringExpenses:', error);
       return {
         success: false,
         error: error.message

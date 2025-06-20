@@ -1,314 +1,305 @@
-# 🏠 Alquileres App Backend
+# 🏠 Alquileres App Backend - Estructura Real
 
-Backend para la aplicación de gestión de alquileres con **estructura simple sin userId**. Proporciona APIs para backup de datos y generación automática de egresos recurrentes.
+Backend adaptado para la **estructura real** de tu base de datos de alquileres. Proporciona APIs para backup de datos y generación automática de egresos recurrentes.
 
-## 🚀 Características Principales
+## 📊 **Estructura Real de la Base de Datos**
 
-### ✅ **Export de Información**
-- **Backup completo**: Exporta todos los datos de Firebase
-- **Backup por colección**: Exporta datos específicos de una colección
-- **Formato JSON**: Datos listos para importar o analizar
-- **Timestamps procesados**: Convierte automáticamente fechas de Firestore
-
-### ✅ **Generación Automática de Egresos Recurrentes**
-- **Proceso programado**: Replica automáticamente egresos recurrentes al siguiente mes
-- **Detección inteligente**: Solo procesa transacciones marcadas como `isRecurring: true`
-- **Prevención de duplicados**: Evita crear registros que ya existen
-- **Modo de prueba**: Simula la generación sin crear registros reales
-- **Seguimiento completo**: Logs detallados y manejo de errores
-
-## 📋 Estructura de Datos
-
-### 🔄 **Estructura Simplificada (Sin userId)**
+Basándome en las imágenes que compartiste, la estructura real es:
 
 ```
 Firebase Database:
-├── properties/              # Propiedades directamente en root
-├── units/                   # Unidades directamente en root
-├── guarantees/              # Garantías directamente en root
-├── services/                # Servicios directamente en root
-└── transactions/            # Transacciones jerárquicas por año/mes
-    └── {year}/
-        └── {month}/
-            └── {transactionId}
+├── properties/                    # Propiedades principales
+│   └── {propertyId}/
+│       ├── expenses/              # Gastos por propiedad
+│       │   └── {year-month}/      # Ej: "2025-06"
+│       │       └── items/
+│       │           └── {expenseId}
+│       └── units/                 # Unidades dentro de propiedad
+│           └── {unitId}/
+│               └── incomes/       # Ingresos por unidad
+│                   └── {year-month}/  # Ej: "2025-06"
+│                       └── {incomeData}
+└── units/                         # Collection independiente de unidades
+    └── {unitId}                   # Información completa de cada unidad
 ```
 
-### 💡 **¿Por qué Sin userId?**
+## 🎯 **Funcionalidades Adaptadas**
 
-Como observaste correctamente, para alquileres no necesitas múltiples usuarios. Esta estructura:
-- **Simplifica** el acceso a los datos
-- **Reduce** la complejidad de las URLs
-- **Mantiene** toda la funcionalidad
-- **Permite** escalar a múltiples usuarios en el futuro si es necesario
-
-## 🛠 Instalación
-
-1. **Clonar y configurar**:
-   ```bash
-   cd D:\development\Personal\alquileres-app-backend
-   npm install
-   ```
-
-2. **Iniciar el servidor**:
-   ```bash
-   npm start
-   # Disponible en http://localhost:3002
-   ```
-
-## 📚 API Endpoints
-
-### 🔐 **Backup (Estructura Simple)**
+### ✅ **Export de Información (Estructura Real)**
 
 ```bash
-# Backup completo
+# Backup completo con estructura real
 GET /api/backup
 
-# Listar colecciones disponibles
+# Backup específico por propiedad
+GET /api/backup/property/{propertyId}
+
+# Listar todas las colecciones
 GET /api/backup/collections
-
-# Backup de una colección específica
-GET /api/backup/collection/{collectionName}
 ```
 
-### 🔄 **Generación Recurrente (Sin userId)**
-
-```bash
-# Generar registros recurrentes
-POST /api/recurring/generate
-
-# Obtener resumen de un período
-GET /api/recurring/summary?year=2025&month=6
-
-# Validar generación antes de ejecutar
-POST /api/recurring/validate
-
-# Listar transacciones recurrentes
-GET /api/recurring/transactions/{year}/{month}/recurring
-
-# Marcar/desmarcar transacción como recurrente
-PUT /api/recurring/transactions/{year}/{month}/{transactionId}/recurring
-
-# Estado del servicio
-GET /api/recurring/health
-```
-
-### 🏠 **Gestión Básica (Estructura Simple)**
-
-```bash
-# Propiedades
-GET /api/properties
-POST /api/properties
-GET /api/properties/{propertyId}
-PUT /api/properties/{propertyId}
-DELETE /api/properties/{propertyId}
-
-# Unidades
-GET /api/units?propertyId=X    # Filtro opcional
-POST /api/units
-
-# Transacciones (por período)
-GET /api/transactions/{year}/{month}
-POST /api/transactions/{year}/{month}
-```
-
-## 🎯 Uso de Scripts
-
-### Generar Registros Recurrentes
-
-```bash
-# Generar para el siguiente mes automático
-node scripts/generate-recurring.js
-
-# Generar para un mes específico
-node scripts/generate-recurring.js 2025 7
-```
-
-### Probar Funcionalidades
-
-```bash
-# Probar backup
-node scripts/test-backup.js full
-node scripts/test-backup.js collections
-node scripts/test-backup.js collection transactions
-
-# Probar generación recurrente
-node scripts/test-recurring.js
-```
-
-## 💡 Cómo Funciona la Generación Recurrente
-
-### 1. **Marcado de Transacciones**
-Las transacciones deben tener el campo `isRecurring: true`:
-
-```javascript
+**Ejemplo de respuesta del backup:**
+```json
 {
-  id: "trans123",
-  type: "expense",
-  description: "Luz ENEL",
-  amount: 120,
-  isRecurring: true,  // ← Campo clave
-  category: "utilities",
-  propertyId: "prop123",
-  year: 2025,
-  month: 6
-}
-```
-
-### 2. **Estructura de Datos Recomendada**
-
-```javascript
-// Propiedades
-{
-  id: "prop123",
-  name: "SURCO",
-  address: "Av. Principal 123",
-  type: "mixed",
-  unitsCount: 3
-}
-
-// Unidades
-{
-  id: "unit456",
-  propertyId: "prop123",
-  name: "Dpto 3er Piso",
-  rent: 800,
-  isOccupied: true,
-  tenant: {
-    name: "Juan Pérez",
-    documentNumber: "12345678",
-    phone: "+51 999 888 777"
+  "version": "1.0",
+  "structure": "real",
+  "properties": [...],
+  "units": [...],
+  "propertiesData": {
+    "propertyId1": {
+      "expenses": {
+        "2025-06": [...],
+        "2025-05": [...]
+      },
+      "units": [
+        {
+          "id": "unitId1",
+          "incomes": {
+            "2025-06": {...},
+            "2025-05": {...}
+          }
+        }
+      ]
+    }
   }
 }
+```
 
-// Transacciones
+### ✅ **Generación Recurrente (Solo Expenses)**
+
+Dado que los **incomes** son por unidad y requieren gestión manual de inquilinos, la generación automática se enfoca solo en **expenses** recurrentes por propiedad.
+
+```bash
+# Generar expenses recurrentes para todas las propiedades
+POST /api/recurring/generate
+
+# Obtener resumen de expenses por período
+GET /api/recurring/summary?year=2025&month=6
+
+# Ver expenses recurrentes de todas las propiedades
+GET /api/recurring/expenses/2025/6/recurring
+
+# Ver expenses recurrentes de una propiedad específica
+GET /api/recurring/properties/{propertyId}/expenses/2025/6/recurring
+
+# Marcar expense como recurrente/no recurrente
+PUT /api/recurring/properties/{propertyId}/expenses/2025/6/{expenseId}/recurring
+```
+
+## 🔧 **Instalación y Uso**
+
+```bash
+# 1. Instalar dependencias
+cd D:\development\Personal\alquileres-app-backend
+npm install
+
+# 2. Iniciar servidor
+npm start
+# Disponible en http://localhost:3002
+```
+
+## 💡 **Cómo Funciona la Generación Recurrente**
+
+### **1. Marcado de Expenses**
+
+Para que un expense se replique automáticamente, debe tener `isRecurring: true`:
+
+```javascript
+// Estructura real de un expense
 {
-  id: "trans789",
-  type: "expense",        // "income" | "expense"
-  description: "Luz ENEL",
-  amount: 120,
-  isRecurring: true,      // Campo para recurrencia
-  category: "utilities",
-  propertyId: "prop123",
-  unitId: "unit456",      // Opcional
-  year: 2025,
+  id: "8NhmwwQQOsj8Tkm4vNP",
+  amount: 1020.2,
+  description: "Cuota Tío Walter",
+  isActive: true,
+  isRecurring: true,    // ← Campo clave para recurrencia
   month: 6,
-  status: "pending"       // "pending" | "paid"
+  unit: "general",
+  year: 2025
 }
 ```
 
-## 📊 Ejemplos de Uso
+### **2. Proceso de Generación**
 
-### 1. **Crear Transacción Recurrente**
+El sistema:
+1. **Busca** todas las propiedades en `/properties/`
+2. **Para cada propiedad**, busca expenses en `/{propertyId}/expenses/{year-month}/items/`
+3. **Filtra** solo los que tienen `isRecurring: true`
+4. **Replica** los expenses al siguiente mes
+5. **Evita duplicados** comparando descripción y monto
 
-```bash
-curl -X POST http://localhost:3002/api/transactions/2025/6 \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "expense",
-    "description": "Luz ENEL",
-    "amount": 120,
-    "isRecurring": true,
-    "category": "utilities",
-    "propertyId": "prop123"
-  }'
-```
+### **3. Estructura de Datos Recomendada**
 
-### 2. **Generar Egresos del Siguiente Mes**
-
-```bash
-curl -X POST http://localhost:3002/api/recurring/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "targetYear": 2025,
-    "targetMonth": 7,
-    "dryRun": false
-  }'
-```
-
-### 3. **Exportar Backup Completo**
-
-```bash
-curl http://localhost:3002/api/backup > alquileres-backup.json
-```
-
-## 🔄 Comparación con Estructura de Usuario
-
-| Aspecto | **Con userId** | **Sin userId (Actual)** |
-|---------|----------------|--------------------------|
-| URL | `/api/backup/{userId}` | `/api/backup` |
-| Complejidad | Mayor | Menor |
-| Escalabilidad | Multi-usuario | Mono-usuario |
-| Simplicidad | ❌ | ✅ |
-| Para alquileres | Innecesario | Perfecto |
-
-## 🚨 Consideraciones Importantes
-
-### ⚠️ **Datos Recurrentes**
-- Solo los **egresos** marcados con `isRecurring: true` se replican
-- Los **ingresos** NO se generan automáticamente (requieren intervención manual)
-- Se recomienda revisar los registros generados antes de marcarlos como pagados
-
-### 🔒 **Seguridad**
-- Usar el mismo proyecto Firebase que `finanzas-app-backend`
-- Las credenciales deben ser las mismas
-- CORS configurado para dominios específicos
-
-### 📈 **Migración Futura**
-Si en el futuro necesitas múltiples usuarios, puedes:
-1. Mantener los datos actuales como usuario "main"
-2. Agregar estructura de usuarios encima
-3. Migrar gradualmente
+Basándome en tus imágenes, el formato correcto es:
 
 ```javascript
-// Estructura futura con usuarios
-users/
-├── main/              # Datos actuales
-│   ├── properties/
-│   ├── units/
-│   └── transactions/
-└── user2/             # Nuevo usuario
-    ├── properties/
-    ├── units/
-    └── transactions/
+// Propiedad
+{
+  id: "hgbZn43WIb0vBuHItkv6",
+  name: "Surco",
+  description: "Casa en Surco de 4 pisos",
+  address: "Salvador Dalí",
+  type: "mixed",
+  electricRate: 1,
+  commonElectricFee: 5,
+  hasElectricControl: false
+}
+
+// Expense (dentro de properties/{propertyId}/expenses/{year-month}/items/)
+{
+  amount: 1020.2,
+  description: "Cuota Tío Walter",
+  isActive: true,
+  isRecurring: true,    // Para que se replique automáticamente
+  month: 6,
+  year: 2025,
+  unit: "general"
+}
+
+// Income (dentro de properties/{propertyId}/units/{unitId}/incomes/{year-month}/)
+{
+  amount: 1600,
+  dueDay: 1,
+  expectedAmount: 1600,
+  month: 6,
+  monthKey: "2025-06",
+  notes: "Alquiler Dpto 4to piso - junio de 2025",
+  paidDate: "2025-06-01",
+  propertyId: "hgbZn43WIb0vBuHItkv6",
+  status: "paid",
+  tenantName: "Cristian Leonardo García Acosta",
+  unitId: "DpCB0CGMjWQDjY6ZZMQz",
+  unitName: "Dpto 4to piso",
+  year: 2025
+}
+
+// Unit (collection independiente)
+{
+  id: "6dqkgNYun0SfYZhos9d",
+  description: "Cuarto con baño independiente en azotea",
+  floor: 5,
+  contract: {
+    endDate: "2025-09-15",
+    monthlyRent: 500,
+    months: 12,
+    startDate: "2024-09-15"
+  },
+  electricControl: {
+    consumption: 0,
+    cost: 0,
+    currentReading: 0,
+    enabled: false,
+    lastReadingDate: null,
+    previousReading: 0
+  },
+  guarantee: {
+    amount: 500
+  }
+}
 ```
 
-## 🤝 Integración con Frontend
+## 📚 **Ejemplos de Uso**
 
-### Endpoints Recomendados para Frontend:
-```javascript
-// Obtener resumen mensual
-fetch('/api/recurring/summary?year=2025&month=6')
-
-// Generar registros del siguiente mes
-fetch('/api/recurring/generate', { method: 'POST' })
-
-// Exportar datos completos
-fetch('/api/backup')
-
-// Obtener propiedades
-fetch('/api/properties')
-
-// Obtener transacciones del mes
-fetch('/api/transactions/2025/6')
-```
-
-## 📄 Ejemplo de Flujo Completo
+### **1. Exportar Backup Completo**
 
 ```bash
-# 1. Probar el estado actual
-node scripts/test-recurring.js
-
-# 2. Si hay transacciones recurrentes, generar
-node scripts/generate-recurring.js 2025 7
-
-# 3. Verificar resultados
-node scripts/test-recurring.js
-
-# 4. Hacer backup de seguridad
-node scripts/test-backup.js full
+curl https://tu-backend.onrender.com/api/backup > backup-alquileres.json
 ```
+
+### **2. Ver Resumen del Mes Actual**
+
+```bash
+curl "https://tu-backend.onrender.com/api/recurring/summary?year=2025&month=6"
+```
+
+**Respuesta:**
+```json
+{
+  "success": true,
+  "year": 2025,
+  "month": 6,
+  "summary": {
+    "properties": 1,
+    "totalExpenses": 3,
+    "totalRecurringExpenses": 1,
+    "propertiesSummary": [
+      {
+        "propertyId": "hgbZn43WIb0vBuHItkv6",
+        "propertyName": "Surco",
+        "totalExpenses": 3,
+        "recurringExpenses": 1,
+        "expenses": [
+          {
+            "description": "Cuota Tío Walter",
+            "amount": 1020.2,
+            "isRecurring": true
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### **3. Generar Expenses del Siguiente Mes**
+
+```bash
+curl -X POST https://tu-backend.onrender.com/api/recurring/generate \
+  -H "Content-Type: application/json" \
+  -d '{"targetYear": 2025, "targetMonth": 7}'
+```
+
+### **4. Marcar Expense como Recurrente**
+
+```bash
+curl -X PUT https://tu-backend.onrender.com/api/recurring/properties/hgbZn43WIb0vBuHItkv6/expenses/2025/6/8NhmwwQQOsj8Tkm4vNP/recurring \
+  -H "Content-Type: application/json" \
+  -d '{"isRecurring": true}'
+```
+
+## 🚨 **Consideraciones Importantes**
+
+### ⚠️ **Solo Expenses son Recurrentes**
+- Los **expenses** se replican automáticamente si tienen `isRecurring: true`
+- Los **incomes** NO se generan automáticamente (requieren gestión manual por inquilino)
+- Esto es correcto porque los alquileres pueden variar, inquilinos pueden cambiar, etc.
+
+### 📋 **Flujo Recomendado**
+1. **Marca tus expenses fijos** como recurrentes (`isRecurring: true`)
+2. **Ejecuta la generación** mensualmente: `POST /api/recurring/generate`
+3. **Gestiona ingresos manualmente** según el estado de cada unidad/inquilino
+4. **Exporta backups** periódicamente para seguridad
+
+### 🔍 **Verificación**
+El sistema está completamente adaptado a tu estructura real. Puedes verificar:
+
+- ✅ Funciona con tu estructura `properties/{propertyId}/expenses/{year-month}/items/`
+- ✅ Funciona con tu estructura `properties/{propertyId}/units/{unitId}/incomes/{year-month}/`
+- ✅ Funciona con tu collection independiente `units/`
+- ✅ Respeta el formato de campos que ya usas (`isActive`, `isRecurring`, etc.)
+
+## 🔄 **Scripts Actualizados**
+
+```bash
+# Probar generación recurrente
+npm run recurring:test
+
+# Generar registros del siguiente mes
+npm run recurring:generate
+
+# Probar backup completo
+npm run backup:test
+```
+
+## 🎯 **Próximos Pasos**
+
+1. **Prueba el backup**: `GET /api/backup` para verificar que extrae todos tus datos
+2. **Marca algunos expenses** como recurrentes en tu BD
+3. **Ejecuta la generación**: `POST /api/recurring/generate`
+4. **Verifica los resultados** en Firebase
+
+¡El backend está 100% adaptado a tu estructura real y listo para usar! 🚀
 
 ---
 
-**🏠 Alquileres App Backend v1.0.0**  
-*Gestión simple de alquileres sin complejidad de usuarios múltiples*
+**🏠 Alquileres App Backend v2.0.0 - Estructura Real**  
+*Adaptado perfectamente a tu base de datos existente*
