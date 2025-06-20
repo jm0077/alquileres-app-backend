@@ -1,0 +1,49 @@
+name: 🔍 Debug API Connection
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 🔍 Debug información
+      run: |
+        echo "🔍 Debugging conexión con la API"
+        echo "📅 Fecha: $(date)"
+        echo "🔗 URL configurada: ${{ secrets.ALQUILERES_API_URL }}"
+        
+        # Verificar que el secret existe
+        if [[ -z "${{ secrets.ALQUILERES_API_URL }}" ]]; then
+          echo "❌ ERROR: Secret ALQUILERES_API_URL no está configurado"
+          echo "🔧 Configura el secret en GitHub: Settings → Secrets and variables → Actions"
+          exit 1
+        fi
+        
+        echo "✅ Secret encontrado"
+        
+        # Probar conectividad básica
+        echo "🌐 Probando conectividad..."
+        
+        # Test 1: Endpoint principal
+        echo "📡 Test 1: Endpoint principal"
+        curl -v --connect-timeout 10 --max-time 30 \
+          -H "User-Agent: GitHub-Debug/1.0" \
+          "${{ secrets.ALQUILERES_API_URL }}/" || echo "FALLÓ"
+        
+        echo -e "\n---\n"
+        
+        # Test 2: Health endpoint
+        echo "📡 Test 2: Health endpoint"
+        curl -v --connect-timeout 10 --max-time 30 \
+          -H "User-Agent: GitHub-Debug/1.0" \
+          "${{ secrets.ALQUILERES_API_URL }}/api/recurring/health" || echo "FALLÓ"
+        
+        echo -e "\n---\n"
+        
+        # Test 3: Backup endpoint (solo headers)
+        echo "📡 Test 3: Backup endpoint (headers)"
+        curl -I --connect-timeout 10 --max-time 30 \
+          -H "User-Agent: GitHub-Debug/1.0" \
+          "${{ secrets.ALQUILERES_API_URL }}/api/backup" || echo "FALLÓ"

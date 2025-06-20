@@ -25,6 +25,38 @@ jobs:
         echo "📅 Fecha: $(date)"
         echo "🌍 Timezone: UTC"
         echo "💾 Tipo: Backup completo"
+        echo "🔗 API URL: ${{ secrets.ALQUILERES_API_URL }}"
+
+    - name: 🔍 Verificar conectividad con la API
+      run: |
+        echo "🔍 Verificando que la API esté activa..."
+        
+        # Intentar conectar al endpoint principal
+        HEALTH_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+          -H "User-Agent: GitHub-Backup/1.0" \
+          --connect-timeout 30 \
+          --max-time 60 \
+          "${{ secrets.ALQUILERES_API_URL }}/" || echo "CURL_FAILED")
+        
+        if [[ "$HEALTH_RESPONSE" == "CURL_FAILED" ]]; then
+          echo "❌ No se puede conectar a la API"
+          echo "🔧 Verificar:"
+          echo "   • URL del secret: ${{ secrets.ALQUILERES_API_URL }}"
+          echo "   • Que Render esté activo"
+          echo "   • Que no haya errores en el servicio"
+          exit 1
+        fi
+        
+        HEALTH_STATUS=$(echo "$HEALTH_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+        echo "📊 Status de conectividad: $HEALTH_STATUS"
+        
+        if [[ "$HEALTH_STATUS" != "200" ]]; then
+          echo "❌ API no responde correctamente (Status: $HEALTH_STATUS)"
+          echo "🔧 Revisar logs de Render"
+          exit 1
+        fi
+        
+        echo "✅ API está activa y respondiendo"
 
     - name: 📥 Realizar backup completo
       run: |
@@ -40,18 +72,40 @@ jobs:
         echo "📁 Archivo: $FILENAME"
         echo "📊 Incluir detalles: $INCLUDE_DETAILS"
         
-        # Realizar llamada al API de backup
-        curl -s \
+        # Realizar llamada al API de backup con timeout extendido
+        HTTP_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" \
           -H "User-Agent: GitHub-Actions-Backup/1.0" \
           -H "Accept: application/json" \
+          --connect-timeout 30 \
+          --max-time 300 \
           "${{ secrets.ALQUILERES_API_URL }}/api/backup?includeDetails=$INCLUDE_DETAILS" \
-          -o "$FILENAME"
+          -o "$FILENAME")
+        
+        HTTP_STATUS=$(echo "$HTTP_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+        
+        echo "📊 HTTP Status: $HTTP_STATUS"
+        
+        if [[ "$HTTP_STATUS" != "200" ]]; then
+          echo "❌ Error en el backup: HTTP $HTTP_STATUS"
+          if [[ -f "$FILENAME" ]]; then
+            echo "📋 Contenido de la respuesta:"
+            head -20 "$FILENAME"
+          fi
+          exit 1
+        fi
         
         # Verificar que el archivo se descargó
         if [[ -f "$FILENAME" ]]; then
-          FILE_SIZE=$(stat -f%z "$FILENAME" 2>/dev/null || stat -c%s "$FILENAME" 2>/dev/null || echo "0")
+          FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || stat -f%z "$FILENAME" 2>/dev/null || echo "0")
           echo "✅ Backup descargado exitosamente"
           echo "📊 Tamaño del archivo: $FILE_SIZE bytes"
+          
+          if [[ "$FILE_SIZE" -lt 100 ]]; then
+            echo "❌ Archivo muy pequeño, posible error"
+            echo "📋 Contenido:"
+            cat "$FILENAME"
+            exit 1
+          fi
           
           # Verificar que es un JSON válido
           if jq '.' "$FILENAME" > /dev/null 2>&1; then
@@ -71,38 +125,17 @@ jobs:
             echo "   • Total ingresos: $TOTAL_INCOMES"
             echo "   • Fecha de exportación: $EXPORT_DATE"
             
-            # Crear summary para GitHub
-            cat >> $GITHUB_STEP_SUMMARY << EOF
-        ## 📦 Backup Automático Completado
-        
-        ### ✅ Backup realizado exitosamente
-        
-        | Información | Valor |
-        |-------------|--------|
-        | 📁 Archivo | \`$FILENAME\` |
-        | 📊 Tamaño | $(echo "scale=2; $FILE_SIZE/1024" | bc -l) KB |
-        | 📅 Fecha | $EXPORT_DATE |
-        
-        ### 📊 Contenido del Backup
-        
-        | Tipo de Datos | Cantidad |
-        |---------------|----------|
-        | 🏠 Propiedades | $PROPERTIES_COUNT |
-        | 🏢 Unidades independientes | $UNITS_COUNT |
-        | 💸 Total egresos | $TOTAL_EXPENSES |
-        | 💰 Total ingresos | $TOTAL_INCOMES |
-        
-        ### 🔧 Información Técnica
-        - **API Endpoint:** \`GET /api/backup\`
-        - **Formato:** JSON
-        - **Compresión:** No aplicada
-        - **Estructura:** Real (adaptada a Firebase)
-        
-        EOF
+            # Guardar nombre del archivo para el siguiente step
+            echo "BACKUP_FILENAME=$FILENAME" >> $GITHUB_ENV
+            echo "FILE_SIZE_BYTES=$FILE_SIZE" >> $GITHUB_ENV
+            echo "PROPERTIES_COUNT=$PROPERTIES_COUNT" >> $GITHUB_ENV
+            echo "UNITS_COUNT=$UNITS_COUNT" >> $GITHUB_ENV
+            echo "TOTAL_EXPENSES=$TOTAL_EXPENSES" >> $GITHUB_ENV
+            echo "TOTAL_INCOMES=$TOTAL_INCOMES" >> $GITHUB_ENV
             
           else
             echo "❌ Error: El archivo descargado no es un JSON válido"
-            echo "📋 Contenido del archivo:"
+            echo "📋 Primeras líneas del archivo:"
             head -20 "$FILENAME"
             exit 1
           fi
@@ -112,11 +145,19 @@ jobs:
           exit 1
         fi
 
+    - name: 💾 Guardar backup como artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: backup-alquileres-${{ github.run_number }}
+        path: ${{ env.BACKUP_FILENAME }}
+        retention-days: 90
+        compression-level: 6
+
     - name: 🔍 Validar integridad del backup
       run: |
         echo "🔍 Validando integridad del backup..."
         
-        FILENAME=$(ls alquileres-backup-*.json | head -1)
+        FILENAME="${{ env.BACKUP_FILENAME }}"
         
         if [[ -f "$FILENAME" ]]; then
           # Verificar estructura básica
@@ -141,20 +182,6 @@ jobs:
           
           if [[ "$HAS_PROPERTIES" == "true" ]] && [[ "$HAS_UNITS" == "true" ]] && [[ "$HAS_STATS" == "true" ]]; then
             echo "✅ Backup validado exitosamente"
-            
-            # Agregar validación al summary
-            cat >> $GITHUB_STEP_SUMMARY << EOF
-        
-        ### ✅ Validación de Integridad
-        
-        - ✅ Estructura JSON válida
-        - ✅ Campos obligatorios presentes
-        - ✅ Secciones principales incluidas
-        - ✅ Formato compatible con restauración
-        
-        **Estado:** Backup listo para uso
-        EOF
-            
           else
             echo "❌ Error: Estructura del backup incompleta"
             exit 1
@@ -170,42 +197,58 @@ jobs:
       run: |
         echo "📊 Generando reporte final del backup..."
         
-        FILENAME=$(ls alquileres-backup-*.json | head -1)
+        FILENAME="${{ env.BACKUP_FILENAME }}"
+        FILE_SIZE="${{ env.FILE_SIZE_BYTES }}"
         
-        # Información del sistema
-        echo "🖥️ Información del entorno:"
-        echo "   • Runner: ubuntu-latest"
-        echo "   • Fecha UTC: $(date -u)"
-        echo "   • Zona horaria: $(date +%Z)"
-        
-        # Información del archivo
-        FILE_SIZE=$(stat -f%z "$FILENAME" 2>/dev/null || stat -c%s "$FILENAME" 2>/dev/null || echo "0")
+        # Calcular tamaño en MB
         FILE_SIZE_MB=$(echo "scale=2; $FILE_SIZE/1024/1024" | bc -l)
+        
+        # Generar hash MD5
+        FILE_HASH=$(md5sum "$FILENAME" | cut -d' ' -f1)
         
         echo "📁 Información del archivo:"
         echo "   • Nombre: $FILENAME"
         echo "   • Tamaño: $FILE_SIZE_MB MB"
-        echo "   • Hash MD5: $(md5sum "$FILENAME" | cut -d' ' -f1)"
+        echo "   • Hash MD5: $FILE_HASH"
         
-        # Finalizar summary
+        # Crear summary para GitHub
         cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 📦 Backup Automático Completado ✅
         
-        ### 📁 Información del Archivo
+        ### 📁 Archivo de Backup
         
-        - **Nombre:** \`$FILENAME\`
-        - **Tamaño:** $FILE_SIZE_MB MB
-        - **Hash MD5:** \`$(md5sum "$FILENAME" | cut -d' ' -f1)\`
+        | Información | Valor |
+        |-------------|--------|
+        | 📁 Nombre | \`$FILENAME\` |
+        | 📊 Tamaño | $FILE_SIZE_MB MB |
+        | 🔒 Hash MD5 | \`$FILE_HASH\` |
+        | 📅 Fecha | $(date) |
         
-        ### 📋 Próximos Pasos
+        ### 📊 Contenido del Backup
         
-        1. El backup está almacenado temporalmente en GitHub Actions
-        2. Para persistencia a largo plazo, considerar:
-           - Subir a Google Drive automáticamente
-           - Enviar por email como adjunto
-           - Almacenar en servicio de backup externo
+        | Tipo de Datos | Cantidad |
+        |---------------|----------|
+        | 🏠 Propiedades | ${{ env.PROPERTIES_COUNT }} |
+        | 🏢 Unidades independientes | ${{ env.UNITS_COUNT }} |
+        | 💸 Total egresos | ${{ env.TOTAL_EXPENSES }} |
+        | 💰 Total ingresos | ${{ env.TOTAL_INCOMES }} |
+        
+        ### 💾 Almacenamiento
+        
+        - ✅ **Guardado como GitHub Artifact**
+        - 📅 **Retención:** 90 días
+        - 📥 **Descarga:** Actions → Artifacts
+        - 🗜️ **Compresión:** Nivel 6
+        
+        ### 🔧 Información Técnica
+        - **API Endpoint:** \`GET /api/backup\`
+        - **Formato:** JSON
+        - **Estructura:** Real (adaptada a Firebase)
+        - **Status:** ✅ Validado
         
         ---
         **🔄 Próximo backup automático:** Día 28 del siguiente mes
+        
         EOF
 
     - name: 🔔 Notificación final
@@ -213,12 +256,17 @@ jobs:
       run: |
         if [[ "${{ job.status }}" == "success" ]]; then
           echo "🎉 Backup completado exitosamente"
-          echo "✅ Datos respaldados correctamente"
+          echo "✅ Archivo guardado como GitHub Artifact"
+          echo "📥 Para descargar: Actions → Artifacts → backup-alquileres-${{ github.run_number }}"
+          echo "📅 Retención: 90 días"
           echo "📅 Próximo backup: 28 del siguiente mes"
         else
           echo "⚠️ El backup falló"
-          echo "🔧 Revisar los logs para identificar el problema"
-          echo "📞 Contactar al administrador si es necesario"
+          echo "🔧 Pasos para resolver:"
+          echo "   1. Verificar que la API esté activa en Render"
+          echo "   2. Revisar el secret ALQUILERES_API_URL"
+          echo "   3. Verificar logs de la API"
+          echo "   4. Probar manualmente: ${{ secrets.ALQUILERES_API_URL }}/api/backup"
         fi
         
         echo "📋 Workflow de backup finalizado: $(date)"
