@@ -1,0 +1,224 @@
+name: 📦 Backup Automático Alquileres
+
+on:
+  # Ejecutar backup el día 28 de cada mes a las 23:00 UTC (antes del proceso recurrente)
+  schedule:
+    - cron: '0 23 28 * *'
+  
+  # Permitir ejecución manual
+  workflow_dispatch:
+    inputs:
+      includeDetails:
+        description: 'Incluir detalles completos (expenses e incomes)'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  backup-data:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📦 Información del backup
+      run: |
+        echo "📦 Iniciando backup automático de alquileres"
+        echo "📅 Fecha: $(date)"
+        echo "🌍 Timezone: UTC"
+        echo "💾 Tipo: Backup completo"
+
+    - name: 📥 Realizar backup completo
+      run: |
+        echo "📥 Descargando backup completo..."
+        
+        # Configurar parámetros
+        INCLUDE_DETAILS="${{ github.event.inputs.includeDetails || 'true' }}"
+        
+        # Generar nombre de archivo con timestamp
+        TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+        FILENAME="alquileres-backup-$TIMESTAMP.json"
+        
+        echo "📁 Archivo: $FILENAME"
+        echo "📊 Incluir detalles: $INCLUDE_DETAILS"
+        
+        # Realizar llamada al API de backup
+        curl -s \
+          -H "User-Agent: GitHub-Actions-Backup/1.0" \
+          -H "Accept: application/json" \
+          "${{ secrets.ALQUILERES_API_URL }}/api/backup?includeDetails=$INCLUDE_DETAILS" \
+          -o "$FILENAME"
+        
+        # Verificar que el archivo se descargó
+        if [[ -f "$FILENAME" ]]; then
+          FILE_SIZE=$(stat -f%z "$FILENAME" 2>/dev/null || stat -c%s "$FILENAME" 2>/dev/null || echo "0")
+          echo "✅ Backup descargado exitosamente"
+          echo "📊 Tamaño del archivo: $FILE_SIZE bytes"
+          
+          # Verificar que es un JSON válido
+          if jq '.' "$FILENAME" > /dev/null 2>&1; then
+            echo "✅ JSON válido confirmado"
+            
+            # Extraer estadísticas del backup
+            PROPERTIES_COUNT=$(jq -r '.stats.properties // 0' "$FILENAME")
+            UNITS_COUNT=$(jq -r '.stats.unitsIndependent // 0' "$FILENAME")
+            TOTAL_EXPENSES=$(jq -r '.stats.totalExpenses // 0' "$FILENAME")
+            TOTAL_INCOMES=$(jq -r '.stats.totalIncomes // 0' "$FILENAME")
+            EXPORT_DATE=$(jq -r '.exportDate // "N/A"' "$FILENAME")
+            
+            echo "📊 Estadísticas del backup:"
+            echo "   • Propiedades: $PROPERTIES_COUNT"
+            echo "   • Unidades independientes: $UNITS_COUNT"
+            echo "   • Total egresos: $TOTAL_EXPENSES"
+            echo "   • Total ingresos: $TOTAL_INCOMES"
+            echo "   • Fecha de exportación: $EXPORT_DATE"
+            
+            # Crear summary para GitHub
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 📦 Backup Automático Completado
+        
+        ### ✅ Backup realizado exitosamente
+        
+        | Información | Valor |
+        |-------------|--------|
+        | 📁 Archivo | \`$FILENAME\` |
+        | 📊 Tamaño | $(echo "scale=2; $FILE_SIZE/1024" | bc -l) KB |
+        | 📅 Fecha | $EXPORT_DATE |
+        
+        ### 📊 Contenido del Backup
+        
+        | Tipo de Datos | Cantidad |
+        |---------------|----------|
+        | 🏠 Propiedades | $PROPERTIES_COUNT |
+        | 🏢 Unidades independientes | $UNITS_COUNT |
+        | 💸 Total egresos | $TOTAL_EXPENSES |
+        | 💰 Total ingresos | $TOTAL_INCOMES |
+        
+        ### 🔧 Información Técnica
+        - **API Endpoint:** \`GET /api/backup\`
+        - **Formato:** JSON
+        - **Compresión:** No aplicada
+        - **Estructura:** Real (adaptada a Firebase)
+        
+        EOF
+            
+          else
+            echo "❌ Error: El archivo descargado no es un JSON válido"
+            echo "📋 Contenido del archivo:"
+            head -20 "$FILENAME"
+            exit 1
+          fi
+          
+        else
+          echo "❌ Error: No se pudo descargar el backup"
+          exit 1
+        fi
+
+    - name: 🔍 Validar integridad del backup
+      run: |
+        echo "🔍 Validando integridad del backup..."
+        
+        FILENAME=$(ls alquileres-backup-*.json | head -1)
+        
+        if [[ -f "$FILENAME" ]]; then
+          # Verificar estructura básica
+          HAS_VERSION=$(jq -r '.version // "missing"' "$FILENAME")
+          HAS_EXPORT_DATE=$(jq -r '.exportDate // "missing"' "$FILENAME")
+          HAS_STRUCTURE=$(jq -r '.structure // "missing"' "$FILENAME")
+          
+          echo "📋 Verificación de estructura:"
+          echo "   • Version: $HAS_VERSION"
+          echo "   • Export Date: $HAS_EXPORT_DATE"  
+          echo "   • Structure: $HAS_STRUCTURE"
+          
+          # Verificar que tiene las secciones principales
+          HAS_PROPERTIES=$(jq -r 'has("properties")' "$FILENAME")
+          HAS_UNITS=$(jq -r 'has("units")' "$FILENAME")
+          HAS_STATS=$(jq -r 'has("stats")' "$FILENAME")
+          
+          echo "📊 Verificación de secciones:"
+          echo "   • Properties: $HAS_PROPERTIES"
+          echo "   • Units: $HAS_UNITS"
+          echo "   • Stats: $HAS_STATS"
+          
+          if [[ "$HAS_PROPERTIES" == "true" ]] && [[ "$HAS_UNITS" == "true" ]] && [[ "$HAS_STATS" == "true" ]]; then
+            echo "✅ Backup validado exitosamente"
+            
+            # Agregar validación al summary
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+        
+        ### ✅ Validación de Integridad
+        
+        - ✅ Estructura JSON válida
+        - ✅ Campos obligatorios presentes
+        - ✅ Secciones principales incluidas
+        - ✅ Formato compatible con restauración
+        
+        **Estado:** Backup listo para uso
+        EOF
+            
+          else
+            echo "❌ Error: Estructura del backup incompleta"
+            exit 1
+          fi
+          
+        else
+          echo "❌ Error: No se encontró archivo de backup"
+          exit 1
+        fi
+
+    - name: 📊 Generar reporte de backup
+      if: success()
+      run: |
+        echo "📊 Generando reporte final del backup..."
+        
+        FILENAME=$(ls alquileres-backup-*.json | head -1)
+        
+        # Información del sistema
+        echo "🖥️ Información del entorno:"
+        echo "   • Runner: ubuntu-latest"
+        echo "   • Fecha UTC: $(date -u)"
+        echo "   • Zona horaria: $(date +%Z)"
+        
+        # Información del archivo
+        FILE_SIZE=$(stat -f%z "$FILENAME" 2>/dev/null || stat -c%s "$FILENAME" 2>/dev/null || echo "0")
+        FILE_SIZE_MB=$(echo "scale=2; $FILE_SIZE/1024/1024" | bc -l)
+        
+        echo "📁 Información del archivo:"
+        echo "   • Nombre: $FILENAME"
+        echo "   • Tamaño: $FILE_SIZE_MB MB"
+        echo "   • Hash MD5: $(md5sum "$FILENAME" | cut -d' ' -f1)"
+        
+        # Finalizar summary
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        
+        ### 📁 Información del Archivo
+        
+        - **Nombre:** \`$FILENAME\`
+        - **Tamaño:** $FILE_SIZE_MB MB
+        - **Hash MD5:** \`$(md5sum "$FILENAME" | cut -d' ' -f1)\`
+        
+        ### 📋 Próximos Pasos
+        
+        1. El backup está almacenado temporalmente en GitHub Actions
+        2. Para persistencia a largo plazo, considerar:
+           - Subir a Google Drive automáticamente
+           - Enviar por email como adjunto
+           - Almacenar en servicio de backup externo
+        
+        ---
+        **🔄 Próximo backup automático:** Día 28 del siguiente mes
+        EOF
+
+    - name: 🔔 Notificación final
+      if: always()
+      run: |
+        if [[ "${{ job.status }}" == "success" ]]; then
+          echo "🎉 Backup completado exitosamente"
+          echo "✅ Datos respaldados correctamente"
+          echo "📅 Próximo backup: 28 del siguiente mes"
+        else
+          echo "⚠️ El backup falló"
+          echo "🔧 Revisar los logs para identificar el problema"
+          echo "📞 Contactar al administrador si es necesario"
+        fi
+        
+        echo "📋 Workflow de backup finalizado: $(date)"

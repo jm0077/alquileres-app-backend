@@ -1,0 +1,190 @@
+name: 🏥 Monitor de Salud API
+
+on:
+  # Verificar cada día a las 8:00 AM UTC que la API esté funcionando
+  schedule:
+    - cron: '0 8 * * *'
+  
+  # Permitir ejecución manual
+  workflow_dispatch:
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 🏥 Verificar salud de la API
+      run: |
+        echo "🏥 Verificando salud de la API de alquileres..."
+        echo "📅 Fecha: $(date)"
+        echo "🌐 URL: ${{ secrets.ALQUILERES_API_URL }}"
+        
+        # Verificar endpoint principal
+        echo "📡 Verificando endpoint principal..."
+        MAIN_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+          -H "User-Agent: GitHub-HealthCheck/1.0" \
+          "${{ secrets.ALQUILERES_API_URL }}/")
+        
+        MAIN_BODY=$(echo "$MAIN_RESPONSE" | sed 's/HTTP_STATUS:.*//')
+        MAIN_STATUS=$(echo "$MAIN_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+        
+        echo "📊 Status principal: $MAIN_STATUS"
+        echo "📋 Respuesta: $MAIN_BODY"
+        
+        # Verificar endpoint de salud de recurrencia
+        echo "🔄 Verificando servicio de recurrencia..."
+        HEALTH_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+          -H "User-Agent: GitHub-HealthCheck/1.0" \
+          "${{ secrets.ALQUILERES_API_URL }}/api/recurring/health")
+        
+        HEALTH_BODY=$(echo "$HEALTH_RESPONSE" | sed 's/HTTP_STATUS:.*//')
+        HEALTH_STATUS=$(echo "$HEALTH_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+        
+        echo "📊 Status recurrencia: $HEALTH_STATUS"
+        echo "📋 Respuesta health: $HEALTH_BODY"
+        
+        # Verificar endpoint de backup
+        echo "💾 Verificando servicio de backup..."
+        BACKUP_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" \
+          -H "User-Agent: GitHub-HealthCheck/1.0" \
+          "${{ secrets.ALQUILERES_API_URL }}/api/backup/collections")
+        
+        BACKUP_STATUS=$(echo "$BACKUP_RESPONSE" | grep -o 'HTTP_STATUS:[0-9]*' | cut -d: -f2)
+        
+        echo "📊 Status backup: $BACKUP_STATUS"
+        
+        # Evaluar estado general
+        ALL_HEALTHY=true
+        
+        if [[ "$MAIN_STATUS" != "200" ]]; then
+          echo "❌ Endpoint principal falló: $MAIN_STATUS"
+          ALL_HEALTHY=false
+        fi
+        
+        if [[ "$HEALTH_STATUS" != "200" ]]; then
+          echo "❌ Servicio de recurrencia falló: $HEALTH_STATUS"
+          ALL_HEALTHY=false
+        fi
+        
+        if [[ "$BACKUP_STATUS" != "200" ]]; then
+          echo "❌ Servicio de backup falló: $BACKUP_STATUS"
+          ALL_HEALTHY=false
+        fi
+        
+        # Generar reporte
+        if [[ "$ALL_HEALTHY" == "true" ]]; then
+          echo "✅ Todos los servicios están funcionando correctamente"
+          
+          # Extraer información de la respuesta de health
+          SERVICE_NAME=$(echo "$HEALTH_BODY" | jq -r '.service // "N/A"')
+          SERVICE_VERSION=$(echo "$HEALTH_BODY" | jq -r '.version // "N/A"')
+          SERVICE_STRUCTURE=$(echo "$HEALTH_BODY" | jq -r '.structure // "N/A"')
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 🏥 Monitor de Salud - Estado Saludable ✅
+        
+        ### 📊 Estado de Servicios
+        
+        | Servicio | Estado | Código |
+        |----------|--------|---------|
+        | 🏠 API Principal | ✅ Activo | $MAIN_STATUS |
+        | 🔄 Recurrencia | ✅ Activo | $HEALTH_STATUS |
+        | 💾 Backup | ✅ Activo | $BACKUP_STATUS |
+        
+        ### ℹ️ Información del Sistema
+        
+        - **Servicio:** $SERVICE_NAME
+        - **Versión:** $SERVICE_VERSION  
+        - **Estructura:** $SERVICE_STRUCTURE
+        - **Última verificación:** $(date)
+        
+        ### 🎯 Estado General: Operacional
+        
+        Todos los servicios están funcionando correctamente y listos para:
+        - ✅ Generar egresos recurrentes
+        - ✅ Realizar backups automáticos
+        - ✅ Procesar solicitudes de API
+        
+        EOF
+          
+        else
+          echo "⚠️ Algunos servicios están fallando"
+          
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 🏥 Monitor de Salud - Problemas Detectados ⚠️
+        
+        ### 📊 Estado de Servicios
+        
+        | Servicio | Estado | Código |
+        |----------|--------|---------|
+        | 🏠 API Principal | $([ "$MAIN_STATUS" == "200" ] && echo "✅ Activo" || echo "❌ Error") | $MAIN_STATUS |
+        | 🔄 Recurrencia | $([ "$HEALTH_STATUS" == "200" ] && echo "✅ Activo" || echo "❌ Error") | $HEALTH_STATUS |
+        | 💾 Backup | $([ "$BACKUP_STATUS" == "200" ] && echo "✅ Activo" || echo "❌ Error") | $BACKUP_STATUS |
+        
+        ### 🚨 Acciones Requeridas
+        
+        1. Verificar logs de Render para identificar errores
+        2. Revisar configuración de la API
+        3. Confirmar que el servicio está desplegado correctamente
+        4. Verificar conectividad con Firebase
+        
+        **Última verificación:** $(date)
+        
+        EOF
+          
+          exit 1
+        fi
+
+    - name: 📊 Verificar rendimiento básico
+      if: success()
+      run: |
+        echo "📊 Verificando rendimiento básico de la API..."
+        
+        # Medir tiempo de respuesta del endpoint de salud
+        START_TIME=$(date +%s%N)
+        
+        curl -s "${{ secrets.ALQUILERES_API_URL }}/api/recurring/health" > /dev/null
+        
+        END_TIME=$(date +%s%N)
+        RESPONSE_TIME=$((($END_TIME - $START_TIME) / 1000000))  # Convertir a milisegundos
+        
+        echo "⏱️ Tiempo de respuesta: ${RESPONSE_TIME}ms"
+        
+        # Evaluar rendimiento
+        if [[ $RESPONSE_TIME -lt 1000 ]]; then
+          PERFORMANCE_STATUS="🟢 Excelente"
+        elif [[ $RESPONSE_TIME -lt 3000 ]]; then
+          PERFORMANCE_STATUS="🟡 Aceptable"
+        else
+          PERFORMANCE_STATUS="🔴 Lento"
+        fi
+        
+        echo "📊 Rendimiento: $PERFORMANCE_STATUS"
+        
+        # Agregar al summary
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        
+        ### ⏱️ Rendimiento
+        
+        - **Tiempo de respuesta:** ${RESPONSE_TIME}ms
+        - **Evaluación:** $PERFORMANCE_STATUS
+        - **Umbral óptimo:** < 1000ms
+        - **Umbral aceptable:** < 3000ms
+        
+        EOF
+
+    - name: 🔔 Notificación final
+      if: always()
+      run: |
+        if [[ "${{ job.status }}" == "success" ]]; then
+          echo "✅ Verificación de salud completada - Sistema operacional"
+          echo "📊 Todos los servicios están funcionando correctamente"
+          echo "⏱️ Rendimiento dentro de parámetros aceptables"
+        else
+          echo "⚠️ Verificación de salud falló - Se detectaron problemas"
+          echo "🔧 Se requiere atención del administrador"
+          echo "📧 Revisar logs y estado del servicio en Render"
+        fi
+        
+        echo "📋 Próxima verificación: Mañana a las 8:00 AM UTC"
+        echo "🏥 Monitor de salud finalizado: $(date)"

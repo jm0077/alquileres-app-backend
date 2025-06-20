@@ -1,0 +1,192 @@
+name: 🏠 Generar Egresos Recurrentes Alquileres
+
+on:
+  # Ejecutar automáticamente el día 1 de cada mes a las 2:00 AM UTC
+  schedule:
+    - cron: '0 2 1 * *'
+  
+  # Permitir ejecución manual desde GitHub
+  workflow_dispatch:
+    inputs:
+      targetYear:
+        description: 'Año destino (opcional)'
+        required: false
+        type: string
+      targetMonth:
+        description: 'Mes destino (opcional)'
+        required: false
+        type: string
+      dryRun:
+        description: 'Solo simular (no crear registros)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  generate-recurring-expenses:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📋 Información del workflow
+      run: |
+        echo "🏠 Generando egresos recurrentes de alquileres"
+        echo "📅 Fecha: $(date)"
+        echo "🌍 Timezone: UTC"
+        echo "🎯 Target: Siguiente mes automático"
+        
+    - name: 🚀 Generar registros recurrentes
+      run: |
+        echo "🔄 Iniciando generación de egresos recurrentes..."
+        
+        # Preparar datos para la API
+        if [[ -n "${{ github.event.inputs.targetYear }}" ]] && [[ -n "${{ github.event.inputs.targetMonth }}" ]]; then
+          PAYLOAD=$(cat <<EOF
+        {
+          "targetYear": ${{ github.event.inputs.targetYear }},
+          "targetMonth": ${{ github.event.inputs.targetMonth }},
+          "dryRun": ${{ github.event.inputs.dryRun || false }}
+        }
+        EOF
+        )
+          echo "📊 Usando parámetros manuales: Año ${{ github.event.inputs.targetYear }}, Mes ${{ github.event.inputs.targetMonth }}"
+        else
+          PAYLOAD='{"dryRun": false}'
+          echo "📅 Usando siguiente mes automático"
+        fi
+        
+        echo "📤 Payload: $PAYLOAD"
+        
+        # Realizar llamada a la API
+        RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -H "User-Agent: GitHub-Actions-Alquileres/1.0" \
+          -d "$PAYLOAD" \
+          "${{ secrets.ALQUILERES_API_URL }}/api/recurring/generate")
+        
+        # Separar respuesta y código HTTP
+        HTTP_BODY=$(echo "$RESPONSE" | sed -n '1,/HTTP_STATUS:/p' | sed '$d')
+        HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+        
+        echo "📊 HTTP Status: $HTTP_STATUS"
+        echo "📋 Respuesta completa:"
+        echo "$HTTP_BODY" | jq '.' || echo "$HTTP_BODY"
+        
+        # Verificar si fue exitoso
+        if [[ "$HTTP_STATUS" == "200" ]]; then
+          echo "✅ Generación completada exitosamente"
+          
+          # Extraer estadísticas de la respuesta
+          TOTAL_CREATED=$(echo "$HTTP_BODY" | jq -r '.summary.totalCreated // 0')
+          TOTAL_SKIPPED=$(echo "$HTTP_BODY" | jq -r '.summary.totalSkipped // 0') 
+          TOTAL_ERRORS=$(echo "$HTTP_BODY" | jq -r '.summary.totalErrors // 0')
+          PROPERTIES_PROCESSED=$(echo "$HTTP_BODY" | jq -r '.summary.propertiesProcessed // 0')
+          
+          echo "📊 Estadísticas:"
+          echo "   • Propiedades procesadas: $PROPERTIES_PROCESSED"
+          echo "   • Egresos creados: $TOTAL_CREATED"
+          echo "   • Egresos omitidos: $TOTAL_SKIPPED"
+          echo "   • Errores: $TOTAL_ERRORS"
+          
+          # Crear summary para GitHub
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 🏠 Generación de Egresos Recurrentes Completada
+        
+        ### ✅ Resultado: Exitoso
+        
+        | Métrica | Valor |
+        |---------|--------|
+        | 🏠 Propiedades procesadas | $PROPERTIES_PROCESSED |
+        | ✅ Egresos creados | $TOTAL_CREATED |
+        | ⏭️ Egresos omitidos | $TOTAL_SKIPPED |
+        | ❌ Errores | $TOTAL_ERRORS |
+        
+        ### 📅 Información del proceso
+        - **Fecha de ejecución:** $(date)
+        - **Método:** Automático (GitHub Actions)
+        - **API:** \`POST /api/recurring/generate\`
+        
+        EOF
+          
+          if [[ "$TOTAL_ERRORS" -gt 0 ]]; then
+            echo "⚠️ Se encontraron errores durante la generación"
+            echo "📋 Revisar logs para más detalles"
+          fi
+          
+        else
+          echo "❌ Error en la generación: HTTP $HTTP_STATUS"
+          echo "📋 Respuesta del servidor:"
+          echo "$HTTP_BODY"
+          
+          # Crear summary de error para GitHub
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+        ## 🏠 Generación de Egresos Recurrentes Falló
+        
+        ### ❌ Error HTTP: $HTTP_STATUS
+        
+        **Respuesta del servidor:**
+        \`\`\`json
+        $HTTP_BODY
+        \`\`\`
+        
+        **Fecha:** $(date)
+        EOF
+          
+          exit 1
+        fi
+
+    - name: 📊 Obtener resumen post-generación
+      if: success()
+      run: |
+        echo "📊 Obteniendo resumen del estado actual..."
+        
+        # Obtener fecha actual para verificar
+        CURRENT_YEAR=$(date +%Y)
+        CURRENT_MONTH=$(date +%-m)
+        
+        # Llamar al endpoint de resumen
+        SUMMARY_RESPONSE=$(curl -s \
+          -H "User-Agent: GitHub-Actions-Alquileres/1.0" \
+          "${{ secrets.ALQUILERES_API_URL }}/api/recurring/summary?year=$CURRENT_YEAR&month=$CURRENT_MONTH")
+        
+        echo "📋 Resumen actual:"
+        echo "$SUMMARY_RESPONSE" | jq '.' || echo "$SUMMARY_RESPONSE"
+        
+        # Extraer información del resumen
+        TOTAL_PROPERTIES=$(echo "$SUMMARY_RESPONSE" | jq -r '.summary.properties // 0')
+        TOTAL_EXPENSES=$(echo "$SUMMARY_RESPONSE" | jq -r '.summary.totalExpenses // 0')
+        RECURRING_EXPENSES=$(echo "$SUMMARY_RESPONSE" | jq -r '.summary.totalRecurringExpenses // 0')
+        
+        echo "📊 Estado del sistema:"
+        echo "   • Total propiedades: $TOTAL_PROPERTIES"
+        echo "   • Total egresos del mes: $TOTAL_EXPENSES" 
+        echo "   • Egresos recurrentes: $RECURRING_EXPENSES"
+        
+        # Agregar al summary de GitHub
+        cat >> $GITHUB_STEP_SUMMARY << EOF
+        
+        ### 📊 Estado Actual del Sistema
+        
+        | Métrica | Valor |
+        |---------|--------|
+        | 🏠 Total propiedades | $TOTAL_PROPERTIES |
+        | 💰 Egresos del mes actual | $TOTAL_EXPENSES |
+        | 🔄 Egresos recurrentes | $RECURRING_EXPENSES |
+        
+        > Consulta realizada para **$CURRENT_MONTH/$CURRENT_YEAR**
+        EOF
+
+    - name: 🔔 Notificación de finalización
+      if: always()
+      run: |
+        if [[ "${{ job.status }}" == "success" ]]; then
+          echo "🎉 Proceso completado exitosamente"
+          echo "📧 Los egresos recurrentes han sido generados"
+          echo "🔍 Revisar el dashboard de alquileres para confirmar"
+        else
+          echo "⚠️ El proceso falló"
+          echo "🔧 Revisar los logs para identificar el problema"
+          echo "📞 Contactar al administrador si es necesario"
+        fi
+        
+        echo "📋 Workflow finalizado: $(date)"

@@ -1,10 +1,53 @@
-# 🏠 Alquileres App Backend - Estructura Real
+# 🏠 Alquileres App Backend - Estructura Real + GitHub Actions
 
-Backend adaptado para la **estructura real** de tu base de datos de alquileres. Proporciona APIs para backup de datos y generación automática de egresos recurrentes.
+Backend adaptado para la **estructura real** de tu base de datos de alquileres con **automatización completa** mediante GitHub Actions.
+
+## 🚀 **Nuevas Funcionalidades con GitHub Actions**
+
+### 🤖 **Automatización Completa**
+
+El sistema ahora incluye 3 workflows automáticos:
+
+1. **🔄 Generación Recurrente** - Día 1 de cada mes a las 2:00 AM UTC
+2. **📦 Backup Automático** - Día 28 de cada mes a las 23:00 UTC  
+3. **🏥 Monitor de Salud** - Diariamente a las 8:00 AM UTC
+
+## 📅 **Calendario de Automatización**
+
+```
+📅 Mes típico:
+├── Día 1  → 🔄 Generar egresos recurrentes (2:00 AM UTC)
+├── Día 8  → 🏥 Verificar salud del sistema (8:00 AM UTC)
+├── Día 15 → 🏥 Verificar salud del sistema (8:00 AM UTC)
+├── Día 22 → 🏥 Verificar salud del sistema (8:00 AM UTC)
+└── Día 28 → 📦 Backup automático (23:00 UTC)
+```
+
+## 🛠️ **Configuración Inicial**
+
+### **1. Configurar Secret en GitHub**
+
+Ve a tu repositorio → Settings → Secrets and variables → Actions → New repository secret:
+
+```
+Name: ALQUILERES_API_URL
+Secret: https://tu-app-en-render.onrender.com
+```
+
+### **2. Activar Workflows**
+
+Los workflows se activarán automáticamente una vez que hagas push a GitHub con los archivos `.github/workflows/`.
+
+### **3. Probar Manualmente**
+
+Puedes probar cada workflow manualmente:
+
+1. **Ve a la pestaña "Actions"** de tu repositorio
+2. **Selecciona el workflow** que quieres probar
+3. **Click en "Run workflow"**
+4. **Ejecutar con parámetros por defecto**
 
 ## 📊 **Estructura Real de la Base de Datos**
-
-Basándome en las imágenes que compartiste, la estructura real es:
 
 ```
 Firebase Database:
@@ -23,10 +66,9 @@ Firebase Database:
     └── {unitId}                   # Información completa de cada unidad
 ```
 
-## 🎯 **Funcionalidades Adaptadas**
+## 🎯 **APIs Disponibles**
 
-### ✅ **Export de Información (Estructura Real)**
-
+### **Backup (Estructura Real)**
 ```bash
 # Backup completo con estructura real
 GET /api/backup
@@ -38,37 +80,7 @@ GET /api/backup/property/{propertyId}
 GET /api/backup/collections
 ```
 
-**Ejemplo de respuesta del backup:**
-```json
-{
-  "version": "1.0",
-  "structure": "real",
-  "properties": [...],
-  "units": [...],
-  "propertiesData": {
-    "propertyId1": {
-      "expenses": {
-        "2025-06": [...],
-        "2025-05": [...]
-      },
-      "units": [
-        {
-          "id": "unitId1",
-          "incomes": {
-            "2025-06": {...},
-            "2025-05": {...}
-          }
-        }
-      ]
-    }
-  }
-}
-```
-
-### ✅ **Generación Recurrente (Solo Expenses)**
-
-Dado que los **incomes** son por unidad y requieren gestión manual de inquilinos, la generación automática se enfoca solo en **expenses** recurrentes por propiedad.
-
+### **Generación Recurrente (Solo Expenses)**
 ```bash
 # Generar expenses recurrentes para todas las propiedades
 POST /api/recurring/generate
@@ -86,220 +98,149 @@ GET /api/recurring/properties/{propertyId}/expenses/2025/6/recurring
 PUT /api/recurring/properties/{propertyId}/expenses/2025/6/{expenseId}/recurring
 ```
 
-## 🔧 **Instalación y Uso**
+## 🔄 **Cómo Funciona la Automatización**
 
-```bash
-# 1. Instalar dependencias
-cd D:\development\Personal\alquileres-app-backend
-npm install
+### **1. Generación Recurrente Automática**
 
-# 2. Iniciar servidor
-npm start
-# Disponible en http://localhost:3002
+**Cuándo:** Día 1 de cada mes a las 2:00 AM UTC (9:00 PM día anterior en Perú)
+
+**Qué hace:**
+1. ✅ Busca todas las propiedades
+2. ✅ Para cada propiedad, busca expenses con `isRecurring: true` del mes anterior
+3. ✅ Replica esos expenses al mes actual
+4. ✅ Evita duplicados
+5. ✅ Genera reporte detallado
+
+**Ejemplo de reporte:**
+```
+📊 Generación Completada ✅
+• Propiedades procesadas: 1
+• Egresos creados: 3
+• Egresos omitidos: 0
+• Errores: 0
 ```
 
-## 💡 **Cómo Funciona la Generación Recurrente**
+### **2. Backup Automático**
 
-### **1. Marcado de Expenses**
+**Cuándo:** Día 28 de cada mes a las 23:00 UTC (6:00 PM en Perú)
 
-Para que un expense se replique automáticamente, debe tener `isRecurring: true`:
+**Qué hace:**
+1. ✅ Descarga backup completo de la API
+2. ✅ Valida integridad del JSON
+3. ✅ Genera reporte con estadísticas
+4. ✅ Calcula hash MD5 para verificación
+
+**Ejemplo de reporte:**
+```
+📦 Backup Completado ✅
+• Archivo: alquileres-backup-2025-07-28_23-15-30.json
+• Tamaño: 2.45 MB
+• Propiedades: 1
+• Unidades: 8
+• Egresos: 45
+• Ingresos: 32
+```
+
+### **3. Monitor de Salud**
+
+**Cuándo:** Diariamente a las 8:00 AM UTC (3:00 AM en Perú)
+
+**Qué hace:**
+1. ✅ Verifica que la API esté respondiendo
+2. ✅ Prueba endpoint de backup
+3. ✅ Prueba endpoint de recurrencia
+4. ✅ Mide tiempo de respuesta
+5. ✅ Alerta si hay problemas
+
+## 💡 **Marcado de Expenses Recurrentes**
+
+Para que un expense se replique automáticamente:
 
 ```javascript
-// Estructura real de un expense
+// En Firebase, agregar este campo a tus expenses:
 {
-  id: "8NhmwwQQOsj8Tkm4vNP",
   amount: 1020.2,
   description: "Cuota Tío Walter",
   isActive: true,
   isRecurring: true,    // ← Campo clave para recurrencia
   month: 6,
-  unit: "general",
-  year: 2025
-}
-```
-
-### **2. Proceso de Generación**
-
-El sistema:
-1. **Busca** todas las propiedades en `/properties/`
-2. **Para cada propiedad**, busca expenses en `/{propertyId}/expenses/{year-month}/items/`
-3. **Filtra** solo los que tienen `isRecurring: true`
-4. **Replica** los expenses al siguiente mes
-5. **Evita duplicados** comparando descripción y monto
-
-### **3. Estructura de Datos Recomendada**
-
-Basándome en tus imágenes, el formato correcto es:
-
-```javascript
-// Propiedad
-{
-  id: "hgbZn43WIb0vBuHItkv6",
-  name: "Surco",
-  description: "Casa en Surco de 4 pisos",
-  address: "Salvador Dalí",
-  type: "mixed",
-  electricRate: 1,
-  commonElectricFee: 5,
-  hasElectricControl: false
-}
-
-// Expense (dentro de properties/{propertyId}/expenses/{year-month}/items/)
-{
-  amount: 1020.2,
-  description: "Cuota Tío Walter",
-  isActive: true,
-  isRecurring: true,    // Para que se replique automáticamente
-  month: 6,
   year: 2025,
   unit: "general"
 }
-
-// Income (dentro de properties/{propertyId}/units/{unitId}/incomes/{year-month}/)
-{
-  amount: 1600,
-  dueDay: 1,
-  expectedAmount: 1600,
-  month: 6,
-  monthKey: "2025-06",
-  notes: "Alquiler Dpto 4to piso - junio de 2025",
-  paidDate: "2025-06-01",
-  propertyId: "hgbZn43WIb0vBuHItkv6",
-  status: "paid",
-  tenantName: "Cristian Leonardo García Acosta",
-  unitId: "DpCB0CGMjWQDjY6ZZMQz",
-  unitName: "Dpto 4to piso",
-  year: 2025
-}
-
-// Unit (collection independiente)
-{
-  id: "6dqkgNYun0SfYZhos9d",
-  description: "Cuarto con baño independiente en azotea",
-  floor: 5,
-  contract: {
-    endDate: "2025-09-15",
-    monthlyRent: 500,
-    months: 12,
-    startDate: "2024-09-15"
-  },
-  electricControl: {
-    consumption: 0,
-    cost: 0,
-    currentReading: 0,
-    enabled: false,
-    lastReadingDate: null,
-    previousReading: 0
-  },
-  guarantee: {
-    amount: 500
-  }
-}
 ```
 
-## 📚 **Ejemplos de Uso**
+## 📱 **Monitoreo desde GitHub**
 
-### **1. Exportar Backup Completo**
+### **Ver Estado de Workflows**
+1. **Ve a tu repo → Actions**
+2. **Verás el estado de cada workflow:**
+   - 🟢 Verde: Ejecutado exitosamente
+   - 🔴 Rojo: Falló (revisar logs)
+   - 🟡 Amarillo: En progreso
 
-```bash
-curl https://tu-backend.onrender.com/api/backup > backup-alquileres.json
+### **Ver Reportes Detallados**
+1. **Click en cualquier workflow ejecutado**
+2. **Ver el "Summary" para estadísticas**
+3. **Ver logs detallados en cada step**
+
+### **Ejecutar Manualmente**
+1. **Actions → Seleccionar workflow**
+2. **"Run workflow" → Configurar parámetros**
+3. **Ver ejecución en tiempo real**
+
+## 🚨 **Qué Hacer si Algo Falla**
+
+### **Si falla la Generación Recurrente:**
+1. ✅ Verificar que la API esté activa en Render
+2. ✅ Verificar que haya expenses con `isRecurring: true`
+3. ✅ Revisar logs del workflow en GitHub Actions
+4. ✅ Ejecutar manualmente para debugging
+
+### **Si falla el Backup:**
+1. ✅ Verificar conectividad con la API
+2. ✅ Verificar que Firebase esté respondiendo
+3. ✅ Revisar permisos de Firebase
+4. ✅ Probar backup manual: `GET /api/backup`
+
+### **Si falla el Monitor de Salud:**
+1. ✅ Verificar que Render no haya pausado el servicio
+2. ✅ Verificar que la URL del secret sea correcta
+3. ✅ Revisar logs de Render para errores
+
+## ⚙️ **Personalización**
+
+### **Cambiar Horarios**
+Editar los archivos en `.github/workflows/` y modificar las líneas `cron`:
+
+```yaml
+# Ejemplo: Cambiar a día 5 de cada mes a las 10:00 AM UTC
+schedule:
+  - cron: '0 10 5 * *'
 ```
 
-### **2. Ver Resumen del Mes Actual**
+### **Cambiar Parámetros**
+Modificar los workflows para incluir parámetros específicos como propiedades particulares o rangos de fechas.
 
-```bash
-curl "https://tu-backend.onrender.com/api/recurring/summary?year=2025&month=6"
-```
+## 🎯 **Beneficios de la Automatización**
 
-**Respuesta:**
-```json
-{
-  "success": true,
-  "year": 2025,
-  "month": 6,
-  "summary": {
-    "properties": 1,
-    "totalExpenses": 3,
-    "totalRecurringExpenses": 1,
-    "propertiesSummary": [
-      {
-        "propertyId": "hgbZn43WIb0vBuHItkv6",
-        "propertyName": "Surco",
-        "totalExpenses": 3,
-        "recurringExpenses": 1,
-        "expenses": [
-          {
-            "description": "Cuota Tío Walter",
-            "amount": 1020.2,
-            "isRecurring": true
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+1. **🔄 Nunca olvides generar egresos recurrentes**
+2. **📦 Backups automáticos para seguridad**
+3. **🏥 Monitoreo continuo del sistema**
+4. **📊 Reportes detallados de cada operación**
+5. **⚡ Ejecución confiable sin intervención manual**
+6. **🔍 Logs completos para debugging**
+7. **📱 Notificaciones visuales en GitHub**
 
-### **3. Generar Expenses del Siguiente Mes**
+## 🔗 **Enlaces Útiles**
 
-```bash
-curl -X POST https://tu-backend.onrender.com/api/recurring/generate \
-  -H "Content-Type: application/json" \
-  -d '{"targetYear": 2025, "targetMonth": 7}'
-```
-
-### **4. Marcar Expense como Recurrente**
-
-```bash
-curl -X PUT https://tu-backend.onrender.com/api/recurring/properties/hgbZn43WIb0vBuHItkv6/expenses/2025/6/8NhmwwQQOsj8Tkm4vNP/recurring \
-  -H "Content-Type: application/json" \
-  -d '{"isRecurring": true}'
-```
-
-## 🚨 **Consideraciones Importantes**
-
-### ⚠️ **Solo Expenses son Recurrentes**
-- Los **expenses** se replican automáticamente si tienen `isRecurring: true`
-- Los **incomes** NO se generan automáticamente (requieren gestión manual por inquilino)
-- Esto es correcto porque los alquileres pueden variar, inquilinos pueden cambiar, etc.
-
-### 📋 **Flujo Recomendado**
-1. **Marca tus expenses fijos** como recurrentes (`isRecurring: true`)
-2. **Ejecuta la generación** mensualmente: `POST /api/recurring/generate`
-3. **Gestiona ingresos manualmente** según el estado de cada unidad/inquilino
-4. **Exporta backups** periódicamente para seguridad
-
-### 🔍 **Verificación**
-El sistema está completamente adaptado a tu estructura real. Puedes verificar:
-
-- ✅ Funciona con tu estructura `properties/{propertyId}/expenses/{year-month}/items/`
-- ✅ Funciona con tu estructura `properties/{propertyId}/units/{unitId}/incomes/{year-month}/`
-- ✅ Funciona con tu collection independiente `units/`
-- ✅ Respeta el formato de campos que ya usas (`isActive`, `isRecurring`, etc.)
-
-## 🔄 **Scripts Actualizados**
-
-```bash
-# Probar generación recurrente
-npm run recurring:test
-
-# Generar registros del siguiente mes
-npm run recurring:generate
-
-# Probar backup completo
-npm run backup:test
-```
-
-## 🎯 **Próximos Pasos**
-
-1. **Prueba el backup**: `GET /api/backup` para verificar que extrae todos tus datos
-2. **Marca algunos expenses** como recurrentes en tu BD
-3. **Ejecuta la generación**: `POST /api/recurring/generate`
-4. **Verifica los resultados** en Firebase
-
-¡El backend está 100% adaptado a tu estructura real y listo para usar! 🚀
+- **API en Render:** https://tu-app.onrender.com
+- **GitHub Actions:** Tu repo → Actions tab
+- **Configuración:** [GITHUB_ACTIONS_SETUP.md](./GITHUB_ACTIONS_SETUP.md)
+- **Firebase Console:** https://console.firebase.google.com
 
 ---
 
-**🏠 Alquileres App Backend v2.0.0 - Estructura Real**  
-*Adaptado perfectamente a tu base de datos existente*
+**🏠 Alquileres App Backend v2.0.0 - Automatización Completa**  
+*Estructura real + GitHub Actions = Sistema autónomo* 🚀
+
+¡Tu sistema de alquileres ahora funciona completamente solo! 🎉
