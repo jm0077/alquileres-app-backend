@@ -20,7 +20,7 @@ class AlquileresRecurringService {
 
   /**
    * Genera registros para el próximo mes basándose en los datos del mes anterior
-   * Solo procesa EXPENSES (no incomes, que son por unidad y requieren intervención manual)
+   * Procesa EXPENSES e INGRESOS MANUALES recurrentes
    * @param {Object} options - Opciones de generación
    * @param {number} options.targetYear - Año destino (opcional, por defecto siguiente mes)
    * @param {number} options.targetMonth - Mes destino (opcional, por defecto siguiente mes)
@@ -54,6 +54,7 @@ class AlquileresRecurringService {
       // Procesar cada propiedad
       const results = {
         expenses: { created: 0, skipped: 0, errors: [] },
+        manualIncomes: { created: 0, skipped: 0, errors: [] },
         summary: {
           sourceYear,
           sourceMonth,
@@ -69,13 +70,24 @@ class AlquileresRecurringService {
         try {
           console.log(`Procesando propiedad: ${property.name || property.id}`);
           
-          const propertyResult = await this._generateRecurringExpenses(
+          // Procesar expenses recurrentes
+          const expenseResult = await this._generateRecurringExpenses(
             property.id, sourceYear, sourceMonth, targetYear, targetMonth, options.dryRun
           );
           
-          results.expenses.created += propertyResult.created;
-          results.expenses.skipped += propertyResult.skipped;
-          results.expenses.errors.push(...propertyResult.errors);
+          // Procesar ingresos manuales recurrentes
+          const manualIncomeResult = await this._generateRecurringManualIncomes(
+            property.id, sourceYear, sourceMonth, targetYear, targetMonth, options.dryRun
+          );
+          
+          results.expenses.created += expenseResult.created;
+          results.expenses.skipped += expenseResult.skipped;
+          results.expenses.errors.push(...expenseResult.errors);
+          
+          results.manualIncomes.created += manualIncomeResult.created;
+          results.manualIncomes.skipped += manualIncomeResult.skipped;
+          results.manualIncomes.errors.push(...manualIncomeResult.errors);
+          
           results.summary.propertiesProcessed++;
           
         } catch (error) {
@@ -89,9 +101,9 @@ class AlquileresRecurringService {
       }
       
       // Calcular totales
-      results.summary.totalCreated = results.expenses.created;
-      results.summary.totalSkipped = results.expenses.skipped;
-      results.summary.totalErrors = results.expenses.errors.length;
+      results.summary.totalCreated = results.expenses.created + results.manualIncomes.created;
+      results.summary.totalSkipped = results.expenses.skipped + results.manualIncomes.skipped;
+      results.summary.totalErrors = results.expenses.errors.length + results.manualIncomes.errors.length;
       
       console.log(`Generación completada. Creados: ${results.summary.totalCreated}, Omitidos: ${results.summary.totalSkipped}, Errores: ${results.summary.totalErrors}`);
       
@@ -219,6 +231,139 @@ class AlquileresRecurringService {
       console.error('Error en _generateRecurringExpenses:', error);
       return { created: 0, skipped: 0, errors: [{ type: 'expense', propertyId, error: error.message }] };
     }
+  }
+
+  /**
+   * Genera ingresos manuales recurrentes para una propiedad específica
+   * @private
+   */
+  async _generateRecurringManualIncomes(propertyId, sourceYear, sourceMonth, targetYear, targetMonth, dryRun = false) {
+    try {
+      console.log(`Generando ingresos manuales recurrentes para propiedad ${propertyId}...`);
+      
+      // Obtener ingresos manuales del mes fuente que sean recurrentes
+      const sourceManualIncomes = await this._getManualIncomes(propertyId, sourceYear, sourceMonth);
+      
+      const results = { created: 0, skipped: 0, errors: [] };
+      
+      if (sourceManualIncomes.length === 0) {
+        console.log(`No se encontraron ingresos manuales en el mes fuente para propiedad ${propertyId}`);
+        return results;
+      }
+      
+      // Filtrar solo los recurrentes
+      const recurringManualIncomes = sourceManualIncomes.filter(income => income.isRecurring === true);
+      
+      if (recurringManualIncomes.length === 0) {
+        console.log(`No se encontraron ingresos manuales recurrentes en el mes fuente para propiedad ${propertyId}`);
+        return results;
+      }
+      
+      console.log(`Encontrados ${recurringManualIncomes.length} ingresos manuales recurrentes en propiedad ${propertyId}`);
+      
+      // Obtener colección destino
+      const targetCollection = this._getManualIncomeCollection(propertyId, targetYear, targetMonth);
+      
+      // Verificar si ya existen ingresos manuales en el mes destino
+      const existingManualIncomes = await this._getManualIncomes(propertyId, targetYear, targetMonth);
+      
+      for (const income of recurringManualIncomes) {
+        try {
+          // Verificar si ya existe un ingreso similar en el mes destino
+          const duplicateExists = existingManualIncomes.some(existing => 
+            existing.description === income.description && 
+            existing.amount === income.amount &&
+            existing.category === income.category
+          );
+          
+          if (duplicateExists) {
+            console.log(`Ingreso manual ${income.description} ya existe en el mes destino`);
+            results.skipped++;
+            continue;
+          }
+          
+          // Crear nuevo registro
+          const newIncomeData = this._cleanDataForNewPeriod(income, targetYear, targetMonth);
+          
+          // Agregar metadata de recurrencia
+          newIncomeData.generatedFrom = {
+            sourceDocId: income.id,
+            sourceYear,
+            sourceMonth,
+            propertyId,
+            generatedAt: new Date().toISOString()
+          };
+          
+          if (!dryRun) {
+            await targetCollection.add(newIncomeData);
+          }
+          
+          console.log(`Ingreso manual recurrente ${income.description} generado para ${targetMonth}/${targetYear} en propiedad ${propertyId}`);
+          results.created++;
+          
+        } catch (error) {
+          console.error(`Error procesando ingreso manual ${income.id}:`, error);
+          results.errors.push({
+            type: 'manualIncome',
+            propertyId,
+            incomeId: income.id,
+            description: income.description || 'Sin descripción',
+            error: error.message
+          });
+        }
+      }
+      
+      return results;
+      
+    } catch (error) {
+      console.error('Error en _generateRecurringManualIncomes:', error);
+      return { created: 0, skipped: 0, errors: [{ type: 'manualIncome', propertyId, error: error.message }] };
+    }
+  }
+
+  /**
+   * Obtiene ingresos manuales de una propiedad en un mes específico
+   * @private
+   */
+  async _getManualIncomes(propertyId, year, month) {
+    try {
+      const monthKey = `${year}-${month.toString().padStart(2, '0')}`;
+      const collectionRef = this.db
+        .collection('properties')
+        .doc(propertyId)
+        .collection('manual-incomes')
+        .doc(monthKey)
+        .collection('items');
+      
+      const snapshot = await collectionRef.get();
+      const incomes = [];
+      
+      snapshot.forEach(doc => {
+        incomes.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      return incomes;
+    } catch (error) {
+      console.error(`Error obteniendo ingresos manuales de ${propertyId}/${year}/${month}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Obtiene la colección de ingresos manuales para un período específico
+   * @private
+   */
+  _getManualIncomeCollection(propertyId, year, month) {
+    const monthKey = `${year}-${month.toString().padStart(2, '0')}`;
+    return this.db
+      .collection('properties')
+      .doc(propertyId)
+      .collection('manual-incomes')
+      .doc(monthKey)
+      .collection('items');
   }
 
   /**
