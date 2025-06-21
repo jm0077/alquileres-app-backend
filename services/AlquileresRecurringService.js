@@ -75,10 +75,10 @@ class AlquileresRecurringService {
             property.id, sourceYear, sourceMonth, targetYear, targetMonth, options.dryRun
           );
           
-          // Procesar ingresos manuales recurrentes
-          const manualIncomeResult = await this._generateRecurringManualIncomes(
-            property.id, sourceYear, sourceMonth, targetYear, targetMonth, options.dryRun
-          );
+          // DESACTIVADO: Procesar ingresos manuales recurrentes
+          // Los ingresos manuales NO se deben generar automáticamente
+          const manualIncomeResult = { created: 0, skipped: 0, errors: [] };
+          console.log(`Generación de ingresos manuales recurrentes DESACTIVADA para propiedad ${property.id}`);
           
           results.expenses.created += expenseResult.created;
           results.expenses.skipped += expenseResult.skipped;
@@ -235,9 +235,23 @@ class AlquileresRecurringService {
 
   /**
    * Genera ingresos manuales recurrentes para una propiedad específica
+   * 
+   * *** FUNCIONALIDAD DESACTIVADA ***
+   * Los ingresos manuales NO se generan automáticamente para evitar
+   * registros no deseados. Deben agregarse manualmente cada mes.
+   * 
    * @private
+   * @deprecated Esta función no se ejecuta automáticamente
    */
   async _generateRecurringManualIncomes(propertyId, sourceYear, sourceMonth, targetYear, targetMonth, dryRun = false) {
+    console.log(`🙅‍♂️ FUNCIONALIDAD DESACTIVADA: Generación de ingresos manuales recurrentes para propiedad ${propertyId}`);
+    console.log(`Los ingresos manuales NO se generan automáticamente. Deben agregarse manualmente cada mes.`);
+    
+    // Retornar resultado vacío sin procesar nada
+    return { created: 0, skipped: 0, errors: [] };
+    
+    // TODO: Código original comentado - mantener por si se necesita reactivar en el futuro
+    /*
     try {
       console.log(`Generando ingresos manuales recurrentes para propiedad ${propertyId}...`);
       
@@ -319,6 +333,7 @@ class AlquileresRecurringService {
       console.error('Error en _generateRecurringManualIncomes:', error);
       return { created: 0, skipped: 0, errors: [{ type: 'manualIncome', propertyId, error: error.message }] };
     }
+    */ // Fin del código comentado
   }
 
   /**
